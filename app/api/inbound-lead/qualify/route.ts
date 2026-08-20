@@ -368,6 +368,58 @@ export async function POST(request: Request) {
         tier: route.tier,
         signals: route.signals,
       },
+      trace: {
+        providers: [
+          {
+            name: "HubSpot CRM",
+            status:
+              crmResult.ownerId || crmResult.existing ? "matched" : "no_match",
+            detail: crmResult.title
+              ? "Contact record returned"
+              : "No contact record returned",
+          },
+          {
+            name: "CrustData company enrichment",
+            status:
+              companyResult.employeeCount === null ? "completed" : "completed",
+            detail:
+              companyResult.employeeCount === null
+                ? "No firmographic profile returned"
+                : "Firmographic profile returned",
+          },
+          {
+            name: "Brandfetch Logo CDN",
+            status: process.env.BRANDFETCH_CLIENT_ID?.trim()
+              ? "deferred"
+              : "not_configured",
+            detail: process.env.BRANDFETCH_CLIENT_ID?.trim()
+              ? "Loads in the browser after routing"
+              : "No Brandfetch client ID configured",
+          },
+        ],
+        routing: {
+          appliedRule:
+            route.owner === CALENDARS.jai
+              ? "Enterprise, scaled sales, or GTM role routes to Jai."
+              : route.owner === CALENDARS.anand
+                ? "Existing customer or deployment role routes to Anand."
+                : "SMB or incomplete profile routes to Chirag.",
+          priorityScore: Math.min(
+            100,
+            route.fitScore +
+              (crmResult.ownerId ? 35 : 0) +
+              (crmResult.existing ? 20 : 0),
+          ),
+          title: crmResult.title,
+          company: {
+            employeeCount: companyResult.employeeCount,
+            salesTeamSize: companyResult.salesTeamSize,
+            industry: companyResult.industry,
+            location: companyResult.location,
+            technologies: companyResult.technologies,
+          },
+        },
+      },
       elapsedMs,
     });
   } catch (error) {

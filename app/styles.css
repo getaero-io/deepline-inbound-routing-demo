@@ -178,6 +178,62 @@ h1 em {
   color: var(--muted);
   padding: 0;
 }
+.evidence {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  padding: 13px;
+  font-size: 12px;
+}
+.evidence summary {
+  cursor: pointer;
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+.evidence h3 {
+  margin: 16px 0 6px;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.evidence-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  border-top: 1px solid var(--line);
+  padding: 8px 0;
+}
+.evidence-row em {
+  color: #16844e;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+.evidence-row small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+}
+.evidence > p {
+  color: var(--muted);
+  line-height: 1.45;
+}
+.evidence-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.evidence-grid span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.evidence-grid b {
+  display: block;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 @media (max-width: 800px) {
   .shell {
     grid-template-columns: 1fr;

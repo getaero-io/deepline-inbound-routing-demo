@@ -11,6 +11,21 @@ type Result = {
   };
   route: { owner: { name: string; bookingUrl: string } };
   qualification: { fitScore: number; tier: string; signals: string[] };
+  trace: {
+    providers: Array<{ name: string; status: string; detail: string }>;
+    routing: {
+      appliedRule: string;
+      priorityScore: number;
+      title: string | null;
+      company: {
+        employeeCount: number | null;
+        salesTeamSize: number | null;
+        industry: string | null;
+        location: string | null;
+        technologies: string[];
+      };
+    };
+  };
   elapsedMs: number;
 };
 
@@ -74,6 +89,49 @@ export function InboundRouting() {
               "Limited public signals"}
           </p>
         </div>
+        <details className="evidence">
+          <summary>Show live routing evidence</summary>
+          <h3>Parallel APIs</h3>
+          {result.trace.providers.map((provider) => (
+            <div className="evidence-row" key={provider.name}>
+              <b>{provider.name}</b>
+              <em>{provider.status.replace("_", " ")}</em>
+              <small>{provider.detail}</small>
+            </div>
+          ))}
+          <h3>Applied rule</h3>
+          <p>{result.trace.routing.appliedRule}</p>
+          <div className="evidence-grid">
+            <span>
+              Priority <b>{result.trace.routing.priorityScore}/100</b>
+            </span>
+            <span>
+              Title <b>{result.trace.routing.title || "Not returned"}</b>
+            </span>
+            <span>
+              People{" "}
+              <b>
+                {result.trace.routing.company.employeeCount?.toLocaleString() ||
+                  "Not returned"}
+              </b>
+            </span>
+            <span>
+              Sales team{" "}
+              <b>
+                {result.trace.routing.company.salesTeamSize?.toLocaleString() ||
+                  "Not returned"}
+              </b>
+            </span>
+            <span>
+              Geo{" "}
+              <b>{result.trace.routing.company.location || "Not returned"}</b>
+            </span>
+            <span>
+              Industry{" "}
+              <b>{result.trace.routing.company.industry || "Not returned"}</b>
+            </span>
+          </div>
+        </details>
         <div className="owner">
           <div>
             <small>Your Deepline expert</small>
