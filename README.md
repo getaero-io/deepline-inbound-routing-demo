@@ -31,7 +31,7 @@ curl -X POST http://localhost:3000/api/inbound-lead/qualify \
   --data @examples/valid-work-email.json
 ```
 
-`examples/invalid-personal-email.json` verifies the no-enrichment rejection path.
+`examples/invalid-personal-email.json` verifies the malformed-input, no-enrichment rejection path. The API also rejects personal email domains before calling providers.
 
 ## Async workflow
 
