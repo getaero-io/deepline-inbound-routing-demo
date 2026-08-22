@@ -1,6 +1,15 @@
 # Deepline inbound routing demo
 
-A standalone Next.js demo for real-time, CRM-aware inbound routing. The API runs the HubSpot contact/company lookup and company enrichment concurrently, has a 4.8-second hard deadline, and immediately returns the booking link.
+A standalone Next.js inbound form that takes only a first name, last name, and work email—then verifies the account, preserves existing CRM ownership, enriches company and contact signals, and presents the right Deepline calendar. The fast route returns immediately; deeper enrichment and non-destructive HubSpot contact updates continue in the background.
+
+## What a visitor experiences
+
+1. Enter a name and work email.
+2. Receive a matching Deepline expert and booking route, normally in a few seconds.
+3. See clear evidence: verified person data when an exact email match exists, company verification when it does not, and the data still arriving after a fast route.
+4. For Chirag routes, book directly in the embedded calendar.
+
+The UI never represents company data as a verified person profile. If no exact work-email match is returned, it says so explicitly and still keeps the booking route available.
 
 ## Routing order
 
@@ -19,9 +28,31 @@ bun install
 bun run dev
 ```
 
-Required deployment values are in `env.example`. `DEEPLINE_API_KEY` is server-only. Never prefix it with `NEXT_PUBLIC_` or commit it. Brandfetch uses a client ID to make a browser-side logo request after the route response, so logo loading adds no qualification latency.
+Required deployment values are in `env.example`. `DEEPLINE_API_KEY` and `CRUSTDATA_API_KEY` are server-only. Never prefix either with `NEXT_PUBLIC_` or commit them. The demo uses Deepline for HubSpot lookups and People Data Labs; direct CrustData is a server-side real-time fallback when the Deepline provider layer has no company result. Brandfetch uses a client ID to make a browser-side logo request after the route response, so logo loading adds no qualification latency.
 
-When `ASYNC_PLAY_NAME` is set, the API starts the included Play with `after()` after returning the calendar. Its launch is capped at 4.5 seconds and never holds the response open.
+The production app is protected with HTTP Basic Auth. Set `INBOUND_DEMO_ACCESS_PASSWORD` only in the production environment and use `deepline` as the username. A production deployment without this value fails closed.
+
+When `INBOUND_DEMO_ASYNC_PLAY_NAME` is set, the API starts the included Play with `after()` after returning the calendar. Its launch is capped and never holds the response open.
+
+## Test the production app
+
+Use the deployed form with a work email and confirm the following:
+
+1. The result includes a Deepline owner and booking path, even if enrichment is still pending.
+2. A known HubSpot owner remains with that owner.
+3. The `Contact verification` panel distinguishes an exact person match from company-only verification.
+4. The page updates automatically after background enrichment completes.
+5. `Show live routing evidence` lists the provider outcomes and applied routing rule.
+
+For a request-level smoke test, use a test-owned work email—not a customer email—against the production endpoint:
+
+```sh
+curl -sS -X POST https://YOUR_DEPLOYMENT/api/inbound-lead/qualify \
+  -H 'content-type: application/json' \
+  --data '{"firstName":"Test","lastName":"Lead","email":"test@example-business.com"}'
+```
+
+This makes live enrichment requests and may consume provider credits. Never send credentials in browser-visible requests or commit `.env.local`.
 
 ## Examples
 

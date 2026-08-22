@@ -110,6 +110,20 @@ h1 em {
   color: #9b1230;
   font-size: 13px;
 }
+.routing-status {
+  display: grid;
+  gap: 5px;
+  margin-top: 18px;
+  padding: 13px 14px;
+  border-left: 2px solid var(--blue);
+  background: #f4f4ff;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.routing-status span {
+  color: var(--muted);
+}
 .company {
   display: flex;
   gap: 14px;
@@ -162,16 +176,45 @@ h1 em {
   margin-bottom: 0;
 }
 .owner {
+  margin-top: 20px;
+  padding: 20px 0 0;
   border-top: 1px solid var(--line);
-  margin-top: 25px;
-  padding-top: 22px;
   display: flex;
-  align-items: end;
+  flex-wrap: wrap;
+  align-items: start;
   justify-content: space-between;
   gap: 20px;
 }
 .owner a {
   margin: 0;
+}
+.owner h2 {
+  margin: 4px 0 0;
+}
+.owner-copy {
+  max-width: 31ch;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.calendar-embed {
+  flex-basis: 100%;
+  width: 100%;
+  margin-top: 2px;
+}
+.calendar-embed iframe {
+  display: block;
+  width: 100%;
+  height: 660px;
+  border: 1px solid var(--line);
+  background: var(--paper);
+}
+.calendar-embed a {
+  display: inline-block;
+  margin-top: 10px;
+  color: var(--ink);
+  font-size: 12px;
 }
 .result > button {
   background: transparent;
@@ -217,6 +260,44 @@ h1 em {
   color: var(--muted);
   line-height: 1.45;
 }
+.contact-enrichment {
+  border-color: #c8c9ed;
+  background: linear-gradient(135deg, #fafaff, #f5f8ff);
+}
+.contact-verdict {
+  margin: 13px 0 11px;
+  color: #146b47;
+  font-size: 12px;
+  font-weight: 700;
+}
+.contact-verdict.not_verified {
+  color: #4f5370;
+}
+.contact-note {
+  margin: 13px 0 0;
+  padding-top: 11px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.full-enrichment pre {
+  max-height: 340px;
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  background: #f6f7fa;
+  color: var(--ink);
+  font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.routing-logic ol {
+  margin: 12px 0 0 18px;
+  padding: 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
 .evidence-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -243,5 +324,8 @@ h1 em {
   .owner {
     align-items: start;
     flex-direction: column;
+  }
+  .calendar-embed iframe {
+    height: 620px;
   }
 }

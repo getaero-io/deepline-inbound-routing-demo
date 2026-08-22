@@ -4,21 +4,20 @@ export default function Page() {
   return (
     <main className="shell">
       <section className="copy">
-        <span>DEEPLINE / INBOUND</span>
+        <span>DEEPLINE</span>
         <h1>
-          The right meeting.
+          Talk to us.
           <br />
-          <em>Before the tab closes.</em>
+          <em>We’ll find the right team.</em>
         </h1>
         <p>
-          Live company signals, HubSpot ownership, deterministic qualification,
-          then the right calendar.
+          Tell us who you are. We’ll verify your company, preserve an existing
+          Deepline relationship, and put the right calendar in front of you.
         </p>
         <ul>
-          <li>HubSpot ownership is preserved</li>
-          <li>20+ sales team, enterprise, and GTM roles route to Jai</li>
-          <li>Existing customers and deployment roles route to Anand</li>
-          <li>SMB and incomplete profiles route to Chirag</li>
+          <li>Usually ready in under two seconds</li>
+          <li>Work email only — no company form field</li>
+          <li>Existing account ownership stays intact</li>
         </ul>
       </section>
       <InboundRouting />
