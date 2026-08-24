@@ -34,7 +34,12 @@ function text(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 function count(value: unknown): number | null {
-  const raw = String(value ?? "").replace(/,/g, "");
+  // Absent values must stay null, not collapse to 0: `Number("")` is 0, which
+  // would report "0 sales staff" for a provider that returned no breakdown at
+  // all and silently satisfy the "below threshold" side of a routing rule.
+  if (value === null || value === undefined) return null;
+  const raw = String(value).replace(/,/g, "");
+  if (!raw.trim()) return null;
   const result = Number(raw);
   if (!Number.isFinite(result)) {
     const range = [...raw.matchAll(/\d+(?:\.\d+)?/g)].map((match) =>
@@ -342,6 +347,9 @@ async function company(domain: string) {
             ...companyData,
             ...basic,
             employee_count: headcount.total ?? basic.employee_count,
+            // Lift the per-role breakdown alongside the total so the shared
+            // profile normalizer below can read sales headcount.
+            by_role_absolute: headcount.by_role_absolute,
             industry:
               taxonomy.professional_network_industry ??
               taxonomy.industry ??
@@ -383,10 +391,18 @@ async function company(domain: string) {
         .filter(Boolean)
         .join(", ")
     : text(profile.location);
-  const roles =
-    isRecord(profile.roles) && isRecord(profile.roles.distribution)
-      ? profile.roles.distribution
-      : {};
+  // Sales headcount is reported under a different key per provider: CrustData
+  // returns `headcount.by_role_absolute` with capitalised role names, People
+  // Data Labs returns `employee_count_by_role` in snake_case. The original
+  // `roles.distribution` shape is kept last as a fallback.
+  const roleCounts = [
+    profile.by_role_absolute,
+    profile.employee_count_by_role,
+    isRecord(profile.roles) ? profile.roles.distribution : null,
+  ].find(isRecord) ?? {};
+  const salesHeadcount = Object.entries(roleCounts).find(
+    ([role]) => role.toLowerCase() === "sales",
+  )?.[1];
   const technologies = Array.isArray(profile.technologies)
     ? profile.technologies
         .map((value) =>
@@ -407,7 +423,7 @@ async function company(domain: string) {
     employeeCount: count(
       profile.employee_count ?? profile.employeeCount ?? profile.size,
     ),
-    salesTeamSize: count(roles.sales),
+    salesTeamSize: count(salesHeadcount),
     revenue: text(profile.annual_revenue) ?? text(profile.revenue) ?? text(profile.estimated_revenue),
     industry: text(profile.industry),
     location: location || null,
