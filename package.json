@@ -1,7 +1,20 @@
 {
   "name": "deepline-inbound-routing-demo",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
-  "dependencies": { "next": "16.3.0-canary.60", "react": "19.2.3", "react-dom": "19.2.3" },
-  "devDependencies": { "@types/node": "22.15.3", "@types/react": "19.2.2", "typescript": "5.9.3" }
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "deepline": "^0.3.21",
+    "next": "16.3.0-canary.60",
+    "react": "19.2.3",
+    "react-dom": "19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.15.3",
+    "@types/react": "19.2.2",
+    "typescript": "5.9.3"
+  }
 }

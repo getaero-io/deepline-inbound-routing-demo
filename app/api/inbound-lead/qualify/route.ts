@@ -1,4 +1,5 @@
 import { after, NextResponse } from "next/server";
+import { ConfigError, Deepline, type DeeplineContext } from "deepline";
 
 export const runtime = "nodejs";
 const DEADLINE_MS = 4_800;
@@ -149,72 +150,48 @@ async function saveEnrichment(leadId: string, value: RecordValue) {
   });
   if (!response.ok) throw new Error("Could not save enrichment status.");
 }
-async function execute(tool: string, payload: RecordValue) {
-  const key = process.env.DEEPLINE_API_KEY?.trim();
-  if (!key) throw new Error("Live enrichment is not configured for this demo.");
-  const base = (
-    process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL || "https://code.deepline.com"
-  ).replace(/\/$/, "");
-  const response = await fetchWithTimeout(
-    `${base}/api/v2/integrations/${encodeURIComponent(tool)}/execute`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${key}`,
-        "content-type": "application/json",
-        "x-deepline-execute-response-contract": "v2-tool-response",
-        "x-deepline-execute-response-intent": "raw",
-      },
-      body: JSON.stringify({ payload }),
-    },
-  );
-  const body = (await response.json().catch(() => ({}))) as RecordValue;
-  if (!response.ok)
-    throw new Error(
-      text(body.error) || `Deepline returned ${response.status}.`,
-    );
-  return body;
-}
-async function enrichWithCrustData(domain: string) {
-  const key = process.env.CRUSTDATA_API_KEY?.trim();
-  if (!key) throw new Error("CrustData is not configured.");
-  const response = await fetchWithTimeout("https://api.crustdata.com/company/enrich", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${key}`,
-      "content-type": "application/json",
-      "x-api-version": "2025-11-01",
-    },
-    body: JSON.stringify({
-      domains: [domain],
-      fields: ["basic_info", "headcount", "taxonomy", "locations"],
-    }),
+// A single shared SDK context. `Deepline.connect()` resolves the API key and
+// base URL from DEEPLINE_API_KEY / DEEPLINE_HOST_URL and applies the request
+// timeout and transient-failure retries that this route previously hand-rolled.
+let connection: Promise<DeeplineContext> | null = null;
+function deepline() {
+  // `connect()` resolves credentials from DEEPLINE_API_KEY or the CLI's stored
+  // auth, so a missing key surfaces as ConfigError rather than being guessed at
+  // here. A failed connect is not cached, letting the next request retry.
+  connection ??= Deepline.connect({
+    baseUrl: process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL,
+    timeout: PROVIDER_TIMEOUT_MS,
+    // The route already races every provider against its own deadline, so a
+    // retry here would only spend the caller's remaining budget.
+    maxRetries: 0,
+  }).catch((error) => {
+    connection = null;
+    throw error instanceof ConfigError
+      ? new Error("Live enrichment is not configured for this demo.")
+      : error;
   });
-  const body = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok)
-    throw new Error(`CrustData returned ${response.status}.`);
-  return body;
+  return connection;
+}
+async function execute(tool: string, payload: RecordValue) {
+  const context = await deepline();
+  const result = await context.tools.execute(tool, payload);
+  // `records()` walks the `raw` envelope, so provider payloads reach the
+  // normalizer in the same shape the direct HTTP calls returned.
+  return result.toolResponse as unknown as RecordValue;
+}
+function enrichWithCrustData(domain: string) {
+  return execute("crustdata_v3_company_enrich", {
+    domains: [domain],
+    fields: ["basic_info", "headcount", "taxonomy", "locations"],
+  });
 }
 function launchAsyncWorkflow(input: RecordValue) {
-  const playName = process.env.INBOUND_DEMO_ASYNC_PLAY_NAME?.trim(),
-    key = process.env.DEEPLINE_API_KEY?.trim();
-  if (!playName || !key) return;
-  const base = (
-    process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL || "https://code.deepline.com"
-  ).replace(/\/$/, "");
+  const playName = process.env.INBOUND_DEMO_ASYNC_PLAY_NAME?.trim();
+  if (!playName) return;
   after(async () => {
     try {
-      await timeout(
-        fetchWithTimeout(`${base}/api/v2/plays/run`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${key}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ name: playName, input }),
-        }),
-        4_500,
-      );
+      const context = await deepline();
+      await timeout(context.play(playName).run(input), 4_500);
     } catch (error) {
       console.error("[inbound-routing] async workflow launch failed", error);
     }
@@ -439,7 +416,7 @@ async function company(domain: string) {
       brandLogo(domain) || text(profile.logo_url),
     enrichmentSource:
       crust.status === "fulfilled" && crustProfiles.length > 0
-        ? "CrustData realtime"
+        ? "CrustData"
         : "People Data Labs",
     // Deliberately preserve the full provider record used by this decision so
     // the client can show all returned signals, not a curated subset.
@@ -495,6 +472,52 @@ function personFromHubSpot(email: string, profile: RecordValue): PersonProfile |
   };
 }
 
+// CrustData v3 nests a person under `person_data`, splitting identity across a
+// `basic_profile` section and `contact.business_emails` objects. Flatten each
+// match into the single record carrying both an email and a name that
+// `matchingPersonProfile` matches on, so the exact-work-email check still
+// decides whether this is a verified person or company-only evidence.
+function flattenCrustPeople(value: unknown): RecordValue {
+  const emails = (source: unknown) =>
+    (Array.isArray(source) ? source : [])
+      .map((entry) =>
+        isRecord(entry) ? text(entry.email) : text(entry),
+      )
+      .filter((entry): entry is string => Boolean(entry));
+  const people = records(value).flatMap((row) => {
+    const data = isRecord(row.person_data) ? row.person_data : null;
+    if (!data) return [];
+    const basic = isRecord(data.basic_profile) ? data.basic_profile : {};
+    const contact = isRecord(data.contact) ? data.contact : {};
+    const network = isRecord(data.professional_network)
+      ? data.professional_network
+      : {};
+    const social = isRecord(data.social_handles) ? data.social_handles : {};
+    const networkHandle = isRecord(social.professional_network_identifier)
+      ? social.professional_network_identifier
+      : {};
+    return [
+      {
+        ...data,
+        ...basic,
+        business_email: emails(contact.business_emails),
+        email: emails(contact.business_emails),
+        title: basic.current_title ?? basic.headline,
+        linkedin_profile_url:
+          networkHandle.profile_url ?? network.professional_network_url,
+        location: isRecord(basic.location)
+          ? basic.location.raw ??
+            [basic.location.city, basic.location.state, basic.location.country]
+              .map(text)
+              .filter(Boolean)
+              .join(", ")
+          : basic.location,
+      } as RecordValue,
+    ];
+  });
+  return { data: people };
+}
+
 function matchingPersonProfile(
   value: unknown,
   email: string,
@@ -545,19 +568,23 @@ async function person(
       first_name: firstName,
       last_name: lastName,
     }),
-    execute("crustdata_v2_enrich_person", {
-      business_email: email,
-      enrich_realtime: true,
-      fields:
-        "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
-    }),
+    execute("crustdata_v3_person_enrich", {
+      business_emails: [email],
+      fields: [
+        "basic_profile",
+        "professional_network",
+        "contact",
+        "experience",
+        "social_handles",
+      ],
+    }).then(flattenCrustPeople),
   ]);
   return (
     (pdl.status === "fulfilled"
       ? matchingPersonProfile(pdl.value, email, "People Data Labs person identity")
       : null) ??
     (crust.status === "fulfilled"
-      ? matchingPersonProfile(crust.value, email, "CrustData realtime person")
+      ? matchingPersonProfile(crust.value, email, "CrustData person")
       : null)
   );
 }

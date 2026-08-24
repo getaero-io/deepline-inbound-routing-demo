@@ -28,7 +28,7 @@ bun install
 bun run dev
 ```
 
-Required deployment values are in `env.example`. `DEEPLINE_API_KEY` and `CRUSTDATA_API_KEY` are server-only. Never prefix either with `NEXT_PUBLIC_` or commit them. The demo uses Deepline for HubSpot lookups and People Data Labs; direct CrustData is a server-side real-time fallback when the Deepline provider layer has no company result. Brandfetch uses a client ID to make a browser-side logo request after the route response, so logo loading adds no qualification latency.
+Required deployment values are in `env.example`. `DEEPLINE_API_KEY` is server-only. Never prefix it with `NEXT_PUBLIC_` or commit it. Every provider call — HubSpot lookups, People Data Labs, and CrustData — goes through the Deepline SDK, so CrustData needs no separate key and its credentials stay in the Deepline workspace. Brandfetch uses a client ID to make a browser-side logo request after the route response, so logo loading adds no qualification latency.
 
 The production app is protected with HTTP Basic Auth. Set `INBOUND_DEMO_ACCESS_PASSWORD` only in the production environment and use `deepline` as the username. A production deployment without this value fails closed.
 
