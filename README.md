@@ -74,3 +74,38 @@ deepline plays publish plays/inbound-lead-async.play.ts
 ```
 
 No email action is enabled by default.
+
+## Booking-aware HubSpot nurture
+
+`plays/inbound-lead-nurture.play.ts` is a separate post-route Play. It keeps
+calendar management outside this app and supports the following durable flow:
+
+1. On route completion, call the Play with `mode: "queue"` to write the
+   versioned score, state, idempotency key, and follow-up due time to the HubSpot
+   contact, plus the appropriate manual lists.
+2. Have a HubSpot workflow (or a signed webhook scheduler) call it again with
+   `mode: "evaluate"` after the grace period, including a definitive
+   `booking.status` from HubSpot activity.
+3. `booked` skips outreach. `unknown` is sent to review. Only `not_booked`
+   creates the owner task and, when configured, enrolls the contact in a
+   HubSpot sequence.
+
+The Play defaults to a dry run. Set `execute: true` only after creating the
+manual lists and custom contact properties referenced by the input:
+
+- `deepline_nurture_state`
+- `deepline_nurture_key`
+- `deepline_followup_due_at`
+- `deepline_fit_score_v1`
+- `deepline_engagement_score_v1`
+- `deepline_score_version`
+
+Use `eventId` as the stable inbound-lead ID for both calls. That makes replay
+safe and leaves a clear receipt for each list write, property update, sequence
+enrollment, and owner task. Do not call the evaluate branch unless the booking
+signal is definitive.
+
+```sh
+deepline plays check plays/inbound-lead-nurture.play.ts
+deepline plays publish plays/inbound-lead-nurture.play.ts
+```
