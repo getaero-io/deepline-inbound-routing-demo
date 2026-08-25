@@ -3,6 +3,7 @@ import { after, NextResponse } from "next/server";
 export const runtime = "nodejs";
 const DEADLINE_MS = 4_800;
 const PROVIDER_TIMEOUT_MS = 3_600;
+const AUTH_FINGERPRINT_TIMEOUT_MS = 1_600;
 const PERSONAL =
   /@(gmail|googlemail|yahoo|hotmail|outlook|icloud|aol|protonmail|proton|live|msn|me|ymail)\./i;
 const CALENDARS = {
@@ -91,6 +92,81 @@ function brandLogo(domain: string) {
   return client
     ? `https://cdn.brandfetch.io/domain/${encodeURIComponent(domain)}/h/128/w/128/theme/light/fallback/404/icon?c=${encodeURIComponent(client)}`
     : null;
+}
+type AuthProvider = {
+  provider: string | null;
+  confidence: "high" | "medium" | "none";
+  source: "technology_profile" | "public_site" | "none";
+  detail: string;
+};
+const AUTH_FINGERPRINTS: Array<[string, RegExp]> = [
+  ["Auth0", /\bauth0(?:\.com)?\b/i],
+  ["WorkOS", /\bworkos(?:\.com)?\b/i],
+  ["Okta", /\bokta(?:\.com)?\b/i],
+  ["Clerk", /\bclerk(?:\.dev)?\b/i],
+  ["Stytch", /\bstytch(?:\.com)?\b/i],
+  ["Descope", /\bdescope(?:\.com)?\b/i],
+  ["Frontegg", /\bfrontegg(?:\.com)?\b/i],
+  ["Supabase Auth", /\bsupabase(?:\.co)?\b/i],
+  ["Firebase Authentication", /\bfirebase(?:app|auth)?\b/i],
+  ["Amazon Cognito", /\b(?:aws)?cognito\b/i],
+  ["Keycloak", /\bkeycloak\b/i],
+  ["Microsoft Entra ID", /\b(?:microsoftonline|entra)\b/i],
+];
+function authFromText(value: string, source: AuthProvider["source"]): AuthProvider {
+  const match = AUTH_FINGERPRINTS.find(([, pattern]) => pattern.test(value));
+  if (!match)
+    return {
+      provider: null,
+      confidence: "none",
+      source: "none",
+      detail: "No public authentication-provider fingerprint detected",
+    };
+  return {
+    provider: match[0],
+    confidence: source === "technology_profile" ? "high" : "medium",
+    source,
+    detail:
+      source === "technology_profile"
+        ? "Matched in the real-time technology profile"
+        : "Matched in public site headers or markup",
+  };
+}
+function authFromTechnologies(technologies: string[]) {
+  return authFromText(technologies.join(" "), "technology_profile");
+}
+function publicWebsiteDomain(domain: string) {
+  const normalized = domain.trim().toLowerCase();
+  // Do not turn a user-supplied email domain into a request to a private host.
+  if (
+    !/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(normalized) ||
+    normalized === "localhost"
+  )
+    return null;
+  return normalized;
+}
+async function authFromPublicSite(domain: string): Promise<AuthProvider> {
+  const hostname = publicWebsiteDomain(domain);
+  if (!hostname)
+    return {
+      provider: null,
+      confidence: "none",
+      source: "none",
+      detail: "Public authentication fingerprint was skipped for this domain",
+    };
+  const response = await fetchWithTimeout(
+    `https://${hostname}`,
+    {
+      headers: { "user-agent": "Deepline inbound routing fingerprint/1.0" },
+      redirect: "follow",
+    },
+    AUTH_FINGERPRINT_TIMEOUT_MS,
+  );
+  const headers = [...response.headers]
+    .map(([name, value]) => `${name}: ${value}`)
+    .join("\n");
+  const markup = (await response.text()).slice(0, 180_000);
+  return authFromText(`${headers}\n${markup}`, "public_site");
 }
 function timezoneFromLocation(location: string | null) {
   const value = location?.toLowerCase() ?? "";
@@ -435,6 +511,7 @@ async function company(domain: string) {
     industry: text(profile.industry),
     location: location || null,
     technologies,
+    auth: authFromTechnologies(technologies),
     logoUrl:
       brandLogo(domain) || text(profile.logo_url),
     enrichmentSource:
@@ -863,12 +940,24 @@ export async function POST(request: Request) {
       return { ownerId: null, existing: false, title: null, person: null, contactId: null, hubspotContact: null, revenue: null, unavailable: true };
     });
   const enrichmentWork = company(domain);
+  // This convenience signal never participates in the route deadline.
+  const authWork = enrichmentWork
+    .then(async (result) =>
+      result.auth.provider ? result.auth : await authFromPublicSite(domain),
+    )
+    .catch((): AuthProvider => ({
+      provider: null,
+      confidence: "none",
+      source: "none",
+      detail: "Public authentication fingerprint could not be checked",
+    }));
   const personWork = person(email, firstName, lastName);
   after(async () => {
-    const [crmOutcome, companyOutcome, personOutcome] = await Promise.allSettled([
+    const [crmOutcome, companyOutcome, personOutcome, authOutcome] = await Promise.allSettled([
       crmWork,
       enrichmentWork,
       personWork,
+      authWork,
     ]);
     if (companyOutcome.status !== "fulfilled") {
       const message =
@@ -901,8 +990,15 @@ export async function POST(request: Request) {
     const verifiedPerson =
       (personOutcome.status === "fulfilled" ? personOutcome.value : null) ??
       crmResult.person;
-    const route = decision({
+    const companyResult = {
       ...companyOutcome.value,
+      auth:
+        authOutcome.status === "fulfilled"
+          ? authOutcome.value
+          : companyOutcome.value.auth,
+    };
+    const route = decision({
+      ...companyResult,
       existing: crmResult.existing,
       title: crmResult.title,
       owner: configuredOwner(crmResult.ownerId),
@@ -910,12 +1006,12 @@ export async function POST(request: Request) {
     const contactEnrichment: ContactEnrichment = {
       title: verifiedPerson?.title ?? crmResult.title,
       titleIsNew: !crmResult.title && Boolean(verifiedPerson?.title),
-      revenue: companyOutcome.value.revenue ?? crmResult.revenue,
+      revenue: companyResult.revenue ?? crmResult.revenue,
       calendar: route.owner.bookingUrl,
       calendarOwner: route.owner.name,
       source: verifiedPerson?.enrichmentSource ?? "No verified person match",
       linkedinUrl: verifiedPerson?.linkedinUrl ?? null,
-      companyName: companyOutcome.value.name,
+      companyName: companyResult.name,
       hubspotContact: crmResult.hubspotContact,
       identityStatus: verifiedPerson ? "verified" : "not_verified",
     };
@@ -929,7 +1025,7 @@ export async function POST(request: Request) {
     try {
       await saveEnrichment(leadId, {
         status: "completed",
-        company: companyOutcome.value,
+        company: companyResult,
         person: verifiedPerson,
         contact: { ...contactEnrichment, hubspotSync },
         qualification: {
@@ -940,7 +1036,14 @@ export async function POST(request: Request) {
         trace: {
           providers: [
             { name: "HubSpot CRM", status: crmResult.unavailable ? "unavailable" : "completed", detail: "Final CRM check" },
-            { name: companyOutcome.value.enrichmentSource, status: "completed", detail: "Verified firmographic profile returned" },
+            { name: companyResult.enrichmentSource, status: "completed", detail: "Verified firmographic profile returned" },
+            {
+              name: "Authentication stack",
+              status: companyResult.auth.provider ? "completed" : "no_match",
+              detail: companyResult.auth.provider
+                ? `${companyResult.auth.provider}: ${companyResult.auth.detail}`
+                : companyResult.auth.detail,
+            },
             {
               name: "Person identity",
               status:
@@ -967,14 +1070,15 @@ export async function POST(request: Request) {
             appliedRule: "Enrichment completed after the initial route.",
             priorityScore: route.fitScore,
             title: crmResult.title,
-            company: companyOutcome.value,
+            company: companyResult,
             attributes: [
               { name: "CRM owner", value: configuredOwner(crmResult.ownerId)?.name ?? "No mapped owner" },
               { name: "Existing customer", value: crmResult.existing ? "Yes" : "No" },
-              { name: "Company size", value: companyOutcome.value.employeeCount?.toLocaleString() ?? "Not returned" },
+              { name: "Company size", value: companyResult.employeeCount?.toLocaleString() ?? "Not returned" },
               { name: "Timezone", value: route.timezone },
               { name: "Title", value: crmResult.title ?? "Not returned" },
-              { name: "Industry", value: companyOutcome.value.industry ?? "Not returned" },
+              { name: "Industry", value: companyResult.industry ?? "Not returned" },
+              { name: "Auth provider", value: companyResult.auth.provider ?? "No provider found" },
               { name: "Revenue", value: "Not returned" },
               { name: "Lead source", value: "Not collected" },
               { name: "Calendar availability", value: "Not checked" },
@@ -1134,6 +1238,7 @@ export async function POST(request: Request) {
             { name: "Title", value: crmResult.title ?? "Not returned" },
             { name: "Industry", value: companyResult.industry ?? "Not returned" },
             { name: "Technology", value: companyResult.technologies.join(", ") || "Not returned" },
+            { name: "Auth provider", value: companyResult.auth.provider ?? "Checking public site…" },
             { name: "Revenue", value: "Not returned" },
             { name: "Lead source", value: "Not collected" },
             { name: "Campaign", value: "Not collected" },

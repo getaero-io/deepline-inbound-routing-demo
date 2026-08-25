@@ -11,6 +11,12 @@ A standalone Next.js inbound form that takes only a first name, last name, and w
 
 The UI never represents company data as a verified person profile. If no exact work-email match is returned, it says so explicitly and still keeps the booking route available.
 
+The routing evidence also shows a non-blocking authentication-stack fingerprint
+when available (for example WorkOS, Auth0, Okta, Clerk, or Cognito). It first
+uses the returned technology profile, then performs a short public-site scan
+only after routing. “No provider found” means no public fingerprint was
+detected; it is not evidence that a company has no authentication provider.
+
 ## Routing order
 
 1. Preserve a configured HubSpot owner.

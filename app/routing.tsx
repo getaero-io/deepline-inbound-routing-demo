@@ -8,6 +8,12 @@ type Result = {
     domain: string;
     employeeCount: number | null;
     logoUrl: string | null;
+    auth?: {
+      provider: string | null;
+      confidence: "high" | "medium" | "none";
+      source: "technology_profile" | "public_site" | "none";
+      detail: string;
+    };
     fullProfile?: Record<string, unknown>;
   };
   route: {
@@ -315,6 +321,9 @@ export function InboundRouting() {
             <span>
               Industry{" "}
               <b>{result.trace.routing.company.industry || "Not returned"}</b>
+            </span>
+            <span>
+              Auth <b>{result.company.auth?.provider ?? "Checking…"}</b>
             </span>
           </div>
           {result.trace.routing.attributes && (
