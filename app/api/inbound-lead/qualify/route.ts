@@ -1,4 +1,5 @@
 import { after, NextResponse } from "next/server";
+import { Deepline } from "deepline";
 
 export const runtime = "nodejs";
 const DEADLINE_MS = 4_800;
@@ -26,6 +27,7 @@ const CALENDARS = {
 } as const;
 type Owner = (typeof CALENDARS)[keyof typeof CALENDARS];
 type RecordValue = Record<string, unknown>;
+let deeplineClient: ReturnType<typeof Deepline.connect> | null = null;
 
 function isRecord(value: unknown): value is RecordValue {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -225,31 +227,26 @@ async function saveEnrichment(leadId: string, value: RecordValue) {
   });
   if (!response.ok) throw new Error("Could not save enrichment status.");
 }
-async function execute(tool: string, payload: RecordValue) {
+function getDeeplineClient() {
   const key = process.env.DEEPLINE_API_KEY?.trim();
   if (!key) throw new Error("Live enrichment is not configured for this demo.");
-  const base = (
-    process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL || "https://code.deepline.com"
-  ).replace(/\/$/, "");
-  const response = await fetchWithTimeout(
-    `${base}/api/v2/integrations/${encodeURIComponent(tool)}/execute`,
-    {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${key}`,
-        "content-type": "application/json",
-        "x-deepline-execute-response-contract": "v2-tool-response",
-        "x-deepline-execute-response-intent": "raw",
-      },
-      body: JSON.stringify({ payload }),
-    },
+  if (!deeplineClient) {
+    deeplineClient = Deepline.connect({
+      apiKey: key,
+      baseUrl: process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL || "https://code.deepline.com",
+      timeout: PROVIDER_TIMEOUT_MS,
+      maxRetries: 0,
+    });
+  }
+  return deeplineClient;
+}
+async function execute(tool: string, payload: RecordValue) {
+  const result = await timeout(
+    (await getDeeplineClient()).tools.execute(tool, payload),
+    PROVIDER_TIMEOUT_MS,
   );
-  const body = (await response.json().catch(() => ({}))) as RecordValue;
-  if (!response.ok)
-    throw new Error(
-      text(body.error) || `Deepline returned ${response.status}.`,
-    );
-  return body;
+  const raw = result.toolResponse.raw;
+  return isRecord(raw) ? raw : { data: raw };
 }
 async function enrichWithCrustData(domain: string) {
   const key = process.env.CRUSTDATA_API_KEY?.trim();
@@ -272,23 +269,12 @@ async function enrichWithCrustData(domain: string) {
   return body;
 }
 function launchAsyncWorkflow(input: RecordValue) {
-  const playName = process.env.INBOUND_DEMO_ASYNC_PLAY_NAME?.trim(),
-    key = process.env.DEEPLINE_API_KEY?.trim();
-  if (!playName || !key) return;
-  const base = (
-    process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL || "https://code.deepline.com"
-  ).replace(/\/$/, "");
+  const playName = process.env.INBOUND_DEMO_ASYNC_PLAY_NAME?.trim();
+  if (!playName || !process.env.DEEPLINE_API_KEY?.trim()) return;
   after(async () => {
     try {
       await timeout(
-        fetchWithTimeout(`${base}/api/v2/plays/run`, {
-          method: "POST",
-          headers: {
-            authorization: `Bearer ${key}`,
-            "content-type": "application/json",
-          },
-          body: JSON.stringify({ name: playName, input }),
-        }),
+        (await getDeeplineClient()).plays.get<RecordValue>(playName).run(input),
         4_500,
       );
     } catch (error) {

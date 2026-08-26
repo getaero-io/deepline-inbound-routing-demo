@@ -243,6 +243,17 @@ export function InboundRouting() {
             </div>
           )}
         </section>
+        {result.company.auth && (
+          <section className="evidence" aria-label="Authentication stack fingerprint">
+            <small>AUTHENTICATION STACK</small>
+            <h3>{result.company.auth.provider ?? "No provider found"}</h3>
+            <p>{result.company.auth.detail}</p>
+            <div className="evidence-grid">
+              <span>Confidence <b>{result.company.auth.confidence}</b></span>
+              <span>Source <b>{result.company.auth.source.replace("_", " ")}</b></span>
+            </div>
+          </section>
+        )}
         {result.person && (
           <details className="evidence person-enrichment" open>
             <summary>Verified person profile</summary>

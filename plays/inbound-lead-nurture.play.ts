@@ -218,6 +218,5 @@ export default definePlay(
   {
     description:
       "Queue and evaluate a booking-aware, idempotent HubSpot nurture branch after inbound routing.",
-    webhook: {},
   },
 );
