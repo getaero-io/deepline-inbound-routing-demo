@@ -11,7 +11,7 @@ type Result = {
     auth?: {
       provider: string | null;
       confidence: "high" | "medium" | "none";
-      source: "technology_profile" | "public_site" | "none";
+      source: "technology_profile" | "public_site" | "public_auth_endpoint" | "none";
       detail: string;
     };
     fullProfile?: Record<string, unknown>;
@@ -256,7 +256,7 @@ export function InboundRouting() {
         )}
         {result.person && (
           <details className="evidence person-enrichment" open>
-            <summary>Verified person profile</summary>
+            <summary>Live contact enrichment</summary>
             <div className="evidence-grid">
               <span>Title <b>{result.person.title || "Not returned"}</b></span>
               <span>Seniority <b>{result.person.seniority || "Not returned"}</b></span>
@@ -274,22 +274,29 @@ export function InboundRouting() {
         )}
         {result.contact && (
           <details className="evidence contact-enrichment" open>
-            <summary>Contact verification</summary>
+            <summary>Routing handoff</summary>
             <p className={`contact-verdict ${result.contact.identityStatus}`}>
               {result.contact.identityStatus === "verified"
-                ? `Verified person · ${result.contact.source}`
-                : "Company verified · no exact person profile returned for this work email"}
+                ? "Live enrichment is verified and ready for routing"
+                : "Company verification is complete; contact identity was not returned"}
             </p>
             <div className="evidence-grid">
-              <span>Email identity <b>{result.contact.identityStatus === "verified" ? "Exact work-email match" : "Not verified"}</b></span>
-              <span>Title <b>{result.contact.identityStatus === "verified" ? result.contact.title || "Not returned" : "Not verified"}</b></span>
               <span>Company revenue <b>{result.contact.revenue || "Not returned by sources"}</b></span>
               <span>Calendar offered <b>{result.contact.calendarOwner}</b></span>
-              <span>HubSpot sync <b>{result.contact.hubspotSync === "updated" ? "Updated without overwriting existing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "Syncing missing fields" : "No existing contact to update"}</b></span>
             </div>
             {result.contact.identityStatus === "not_verified" && (
               <p className="contact-note">The route uses verified company and CRM signals only. We do not infer a title, seniority, or person record without an exact email match.</p>
             )}
+          </details>
+        )}
+        {result.contact && (
+          <details className="evidence" open>
+            <summary>HubSpot record</summary>
+            <div className="evidence-grid">
+              <span>CRM contact <b>{result.contact.hubspotSync === "not_applicable" ? "No matching contact" : "Matched"}</b></span>
+              <span>Fill-only sync <b>{result.contact.hubspotSync === "updated" ? "Updated missing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "In progress" : "Not applicable"}</b></span>
+            </div>
+            <p className="contact-note">CRM fields stay separate from live enrichment. When a contact exists, only empty supported fields are filled; populated fields are never overwritten.</p>
           </details>
         )}
         <details className="evidence">

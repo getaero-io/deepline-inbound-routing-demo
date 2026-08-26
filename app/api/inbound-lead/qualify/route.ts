@@ -98,10 +98,11 @@ function brandLogo(domain: string) {
 type AuthProvider = {
   provider: string | null;
   confidence: "high" | "medium" | "none";
-  source: "technology_profile" | "public_site" | "none";
+  source: "technology_profile" | "public_site" | "public_auth_endpoint" | "none";
   detail: string;
 };
 const AUTH_FINGERPRINTS: Array<[string, RegExp]> = [
+  ["Better Auth", /\b(?:better-auth|betterauth)\b/i],
   ["Auth0", /\bauth0(?:\.com)?\b/i],
   ["WorkOS", /\bworkos(?:\.com)?\b/i],
   ["Okta", /\bokta(?:\.com)?\b/i],
@@ -185,7 +186,34 @@ async function publicSiteProbe(domain: string): Promise<PublicSiteProbe> {
   };
 }
 async function authFromPublicSite(domain: string): Promise<AuthProvider> {
-  return (await publicSiteProbe(domain)).auth;
+  const publicSite = await publicSiteProbe(domain);
+  if (publicSite.auth.provider) return publicSite.auth;
+  const hostname = publicWebsiteDomain(domain);
+  if (!hostname) return publicSite.auth;
+  // Better Auth is normally server-side and deliberately leaves no client bundle
+  // signature. Its stable, public health endpoint is a stronger signal than a
+  // script-name match, and follows the application's canonical redirect.
+  try {
+    const response = await fetchWithTimeout(
+      `https://${hostname}/api/auth/ok`,
+      {
+        headers: { "user-agent": "Deepline inbound routing fingerprint/1.0" },
+        redirect: "follow",
+      },
+      AUTH_FINGERPRINT_TIMEOUT_MS,
+    );
+    const body = (await response.text()).slice(0, 1_000).trim();
+    if (response.ok && /^\{\s*"ok"\s*:\s*true\s*\}$/.test(body))
+      return {
+        provider: "Better Auth",
+        confidence: "high",
+        source: "public_auth_endpoint",
+        detail: "Verified by the public Better Auth /api/auth/ok endpoint",
+      };
+  } catch {
+    // Auth detection is informational and must never affect routing.
+  }
+  return publicSite.auth;
 }
 function timezoneFromLocation(location: string | null) {
   const value = location?.toLowerCase() ?? "";
