@@ -147,14 +147,25 @@ function publicWebsiteDomain(domain: string) {
     return null;
   return normalized;
 }
-async function authFromPublicSite(domain: string): Promise<AuthProvider> {
+type PublicSiteProbe = { auth: AuthProvider; name: string | null };
+function publicSiteName(markup: string) {
+  const siteName = markup.match(
+    /<meta[^>]+(?:property|name)=["'](?:og:site_name|application-name)["'][^>]+content=["']([^"']+)["']/i,
+  )?.[1];
+  const title = markup.match(/<title[^>]*>\s*([^<]{2,120})\s*<\/title>/i)?.[1];
+  return text(siteName)?.replace(/\s+[|–—-].*$/, "") ?? text(title)?.replace(/\s+[|–—-].*$/, "") ?? null;
+}
+async function publicSiteProbe(domain: string): Promise<PublicSiteProbe> {
   const hostname = publicWebsiteDomain(domain);
   if (!hostname)
     return {
-      provider: null,
-      confidence: "none",
-      source: "none",
-      detail: "Public authentication fingerprint was skipped for this domain",
+      auth: {
+        provider: null,
+        confidence: "none",
+        source: "none",
+        detail: "Public authentication fingerprint was skipped for this domain",
+      },
+      name: null,
     };
   const response = await fetchWithTimeout(
     `https://${hostname}`,
@@ -168,7 +179,13 @@ async function authFromPublicSite(domain: string): Promise<AuthProvider> {
     .map(([name, value]) => `${name}: ${value}`)
     .join("\n");
   const markup = (await response.text()).slice(0, 180_000);
-  return authFromText(`${headers}\n${markup}`, "public_site");
+  return {
+    auth: authFromText(`${headers}\n${markup}`, "public_site"),
+    name: publicSiteName(markup),
+  };
+}
+async function authFromPublicSite(domain: string): Promise<AuthProvider> {
+  return (await publicSiteProbe(domain)).auth;
 }
 function timezoneFromLocation(location: string | null) {
   const value = location?.toLowerCase() ?? "";
@@ -452,6 +469,27 @@ async function company(domain: string) {
     );
   });
   if (!profile) {
+    const publicSite = await publicSiteProbe(domain).catch(() => null);
+    if (publicSite?.name) {
+      return {
+        name: publicSite.name,
+        domain,
+        employeeCount: null,
+        salesTeamSize: null,
+        revenue: null,
+        industry: null,
+        location: null,
+        technologies: [],
+        auth: publicSite.auth,
+        logoUrl: brandLogo(domain),
+        enrichmentSource: "Public website fallback",
+        fullProfile: {
+          domain,
+          name: publicSite.name,
+          verification: "Both firmographic providers missed; public site identity verified.",
+        },
+      };
+    }
     const result = [crust, pdl]
       .map((source, index) => {
         const name = index === 0 ? "CrustData" : "People Data Labs";
@@ -929,7 +967,9 @@ export async function POST(request: Request) {
   // This convenience signal never participates in the route deadline.
   const authWork = enrichmentWork
     .then(async (result) =>
-      result.auth.provider ? result.auth : await authFromPublicSite(domain),
+      result.auth.provider || result.auth.source === "public_site"
+        ? result.auth
+        : await authFromPublicSite(domain),
     )
     .catch((): AuthProvider => ({
       provider: null,
