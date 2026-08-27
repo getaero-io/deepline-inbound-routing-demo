@@ -89,7 +89,7 @@ h1 em {
   font: inherit;
 }
 .card button,
-.owner a {
+.owner a.calendar-cta {
   display: inline-block;
   border: 0;
   margin-top: 24px;
@@ -99,6 +99,15 @@ h1 em {
   font-weight: bold;
   text-decoration: none;
   cursor: pointer;
+}
+.owner a.calendar-cta {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 13px 18px;
+  font-size: 14px;
+  line-height: 1.2;
 }
 .card button:disabled {
   opacity: 0.6;
@@ -210,11 +219,8 @@ h1 em {
   border: 1px solid var(--line);
   background: var(--paper);
 }
-.calendar-embed a {
-  display: inline-block;
+.calendar-embed a.calendar-cta {
   margin-top: 10px;
-  color: var(--ink);
-  font-size: 12px;
 }
 .result > button {
   background: transparent;
@@ -317,6 +323,10 @@ h1 em {
   background: #ffe9ed;
   color: #9b1230;
 }
+.waterfall-outcome em[data-status="partial"] {
+  background: #fff4d6;
+  color: #765100;
+}
 .sdk-note {
   margin-bottom: 0;
   padding-top: 10px;
@@ -395,6 +405,10 @@ h1 em {
   outline: 3px solid #2926ff45;
   outline-offset: 2px;
 }
+.owner a.calendar-cta:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
 @media (max-width: 800px) {
   .shell {
     grid-template-columns: 1fr;
@@ -407,5 +421,8 @@ h1 em {
   }
   .calendar-embed iframe {
     height: 620px;
+  }
+  .owner a.calendar-cta {
+    width: 100%;
   }
 }

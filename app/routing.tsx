@@ -2,11 +2,20 @@
 
 import { FormEvent, useEffect, useState } from "react";
 
+import { authProviderLabel } from "../lib/presentation";
+
 type Result = {
   company: {
     name: string | null;
     domain: string;
     employeeCount: number | null;
+    employeeRange: string | null;
+    salesTeamSize: number | null;
+    revenue: string | null;
+    industry: string | null;
+    location: string | null;
+    technologies: string[];
+    enrichmentSource: string;
     logoUrl: string | null;
     auth?: {
       provider: string | null;
@@ -40,6 +49,10 @@ type Result = {
     source: string;
     identityStatus: "verified" | "not_verified";
     hubspotSync?: "pending" | "updated" | "not_needed" | "not_applicable" | "failed";
+    hubspotContactMatched: boolean;
+    hubspotCompanyMatched: boolean;
+    hubspotContactUnavailable: boolean;
+    hubspotCompanyUnavailable: boolean;
   };
   trace: {
     waterfalls?: Array<{
@@ -48,7 +61,7 @@ type Result = {
         order: number;
         provider: string;
         tool: string;
-        status: "hit" | "miss" | "error" | "skipped" | "pending";
+        status: "hit" | "partial" | "miss" | "error" | "skipped" | "pending";
         durationMs: number;
         detail: string;
       }>;
@@ -60,6 +73,7 @@ type Result = {
       title: string | null;
       company: {
         employeeCount: number | null;
+        employeeRange: string | null;
         salesTeamSize: number | null;
         industry: string | null;
         location: string | null;
@@ -257,11 +271,12 @@ export function InboundRouting() {
           </div>
           {!isChiragRoute && (
             <a
+              className="calendar-cta"
               href={result.route.owner.bookingUrl}
               target="_blank"
               rel="noreferrer"
             >
-              Open calendar →
+              Open calendar in a new tab ↗
             </a>
           )}
           {isChiragRoute && (
@@ -271,8 +286,13 @@ export function InboundRouting() {
                 title="Book time with Chirag Toprani"
                 loading="eager"
               />
-              <a href={result.route.owner.bookingUrl} target="_blank" rel="noreferrer">
-                Open Chirag’s calendar in a new tab →
+              <a
+                className="calendar-cta"
+                href={result.route.owner.bookingUrl}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open calendar in a new tab ↗
               </a>
             </div>
           )}
@@ -330,17 +350,21 @@ export function InboundRouting() {
         <details className="evidence company-enrichment" open>
           <summary>Live company enrichment</summary>
           <div className="evidence-grid">
-            <span>People <b>{result.company.employeeCount?.toLocaleString() || "Not returned"}</b></span>
-            <span>Revenue <b>{result.contact?.revenue || "Not returned"}</b></span>
-            <span>Industry <b>{result.trace.routing.company.industry || "Not returned"}</b></span>
-            <span>Geo <b>{result.trace.routing.company.location || "Not returned"}</b></span>
+            <span>People <b>{result.company.employeeRange ?? result.company.employeeCount?.toLocaleString() ?? "Not returned"}</b></span>
+            <span>Sales team <b>{result.company.salesTeamSize?.toLocaleString() ?? "Not returned"}</b></span>
+            <span>Revenue <b>{result.company.revenue ?? "Not returned"}</b></span>
+            <span>Industry <b>{result.company.industry || "Not returned"}</b></span>
+            <span>Geo <b>{result.company.location || "Not returned"}</b></span>
+            <span>Technology <b>{result.company.technologies.join(", ") || "Not returned"}</b></span>
+            <span>Source <b>{result.company.enrichmentSource}</b></span>
           </div>
         </details>
         {result.contact && (
           <details className="evidence" open>
             <summary>HubSpot record</summary>
             <div className="evidence-grid">
-              <span>CRM contact <b>{result.contact.hubspotSync === "not_applicable" ? "No matching contact" : "Matched"}</b></span>
+              <span>CRM contact <b>{result.contact.hubspotContactMatched ? "Matched" : result.contact.hubspotContactUnavailable ? "Lookup unavailable" : "No matching contact"}</b></span>
+              <span>CRM account <b>{result.contact.hubspotCompanyMatched ? "Matched" : result.contact.hubspotCompanyUnavailable ? "Lookup unavailable" : "No matching account"}</b></span>
               <span>Fill-only sync <b>{result.contact.hubspotSync === "updated" ? "Updated missing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "In progress" : "Not applicable"}</b></span>
             </div>
             <p className="contact-note">CRM fields stay separate from live enrichment. When a contact exists, only empty supported fields are filled; populated fields are never overwritten.</p>
@@ -379,7 +403,8 @@ export function InboundRouting() {
             <span>
               People{" "}
               <b>
-                {result.trace.routing.company.employeeCount?.toLocaleString() ||
+                {result.trace.routing.company.employeeRange ??
+                  result.trace.routing.company.employeeCount?.toLocaleString() ??
                   "Not returned"}
               </b>
             </span>
@@ -399,7 +424,13 @@ export function InboundRouting() {
               <b>{result.trace.routing.company.industry || "Not returned"}</b>
             </span>
             <span>
-              Auth <b>{result.company.auth?.provider ?? "Checking…"}</b>
+              Auth{" "}
+              <b>
+                {authProviderLabel(
+                  result.company.auth,
+                  result.enrichment?.status,
+                )}
+              </b>
             </span>
           </div>
           {result.trace.routing.attributes && (
@@ -419,8 +450,9 @@ export function InboundRouting() {
           <details className="evidence full-enrichment">
           <summary>Full company payload (advanced)</summary>
             <p>
-              Every returned field used to verify this company. No provider key
-              or internal credential is included.
+              Complete selected provider payload. The fields above are
+              reconciled from this source; no provider key or internal
+              credential is included.
             </p>
             <pre>{JSON.stringify(result.company.fullProfile, null, 2)}</pre>
           </details>

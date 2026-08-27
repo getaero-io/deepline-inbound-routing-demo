@@ -60,7 +60,8 @@ describe("company enrichment waterfall", () => {
 
     expect(result.company).toMatchObject({
       name: "Acme",
-      employeeCount: 1000,
+      employeeCount: 501,
+      employeeRange: "501-1000",
       salesTeamSize: 42,
       revenue: "50000000-100000000",
       industry: "Software",
@@ -103,7 +104,8 @@ describe("company enrichment waterfall", () => {
     const result = await enrichCompany("fallback.example", runner);
 
     expect(result.company?.name).toBe("Fallback Systems");
-    expect(result.company?.employeeCount).toBe(500);
+    expect(result.company?.employeeCount).toBe(251);
+    expect(result.company?.employeeRange).toBe("251-500");
     expect(calls).toEqual([
       "crustdata_v3_company_enrich",
       "peopledatalabs_enrich_company",
@@ -112,6 +114,36 @@ describe("company enrichment waterfall", () => {
       "miss",
       "hit",
     ]);
+  });
+
+  test("reconciles returned PDL revenue and sales-team fields", async () => {
+    const runner: ToolRunner = async (tool) =>
+      tool === "crustdata_v3_company_enrich"
+        ? { matches: [] }
+        : {
+            name: "Salesbricks",
+            website: "salesbricks.com",
+            employee_count: 25,
+            inferred_revenue: "$10M-$25M",
+            industry: "computer software",
+            industry_v2: "software development",
+            location: {
+              name: "san mateo, california, united states",
+              locality: "san mateo",
+              region: "california",
+              country: "united states",
+            },
+            employee_count_by_role: { sales: 1 },
+          };
+
+    const result = await enrichCompany("salesbricks.com", runner);
+
+    expect(result.company?.revenue).toBe("$10M-$25M");
+    expect(result.company?.salesTeamSize).toBe(1);
+    expect(result.company?.industry).toBe("software development");
+    expect(result.company?.location).toBe(
+      "san mateo, california, united states",
+    );
   });
 
   test("a CrustData error invokes People Data Labs exactly once", async () => {
@@ -264,6 +296,46 @@ describe("person enrichment waterfall", () => {
     expect(String(inputs[1]?.data_include)).not.toContain("personal_emails");
     expect(JSON.stringify(result.person?.fullProfile)).not.toContain("private@example.net");
     expect(JSON.stringify(result.person?.fullProfile)).not.toContain("5555550123");
+  });
+
+  test("a title-less exact CrustData identity falls through and merges PDL fields", async () => {
+    const calls: string[] = [];
+    const runner: ToolRunner = async (tool) => {
+      calls.push(tool);
+      return tool === "crustdata_v2_enrich_person"
+        ? {
+            business_email: "alex@acme.com",
+            linkedin_profile_url: "https://linkedin.com/in/alex",
+          }
+        : {
+            data: {
+              work_email: "alex@acme.com",
+              full_name: "Alex Morgan",
+              job_title: "Revenue Operations Manager",
+              job_title_levels: ["manager"],
+            },
+          };
+    };
+
+    const result = await enrichPerson(
+      { email: "alex@acme.com", firstName: "Alek", lastName: "Mrogan" },
+      runner,
+    );
+
+    expect(calls).toEqual([
+      "crustdata_v2_enrich_person",
+      "peopledatalabs_enrich_contact",
+    ]);
+    expect(result.person?.fullName).toBe("Alex Morgan");
+    expect(result.person?.title).toBe("Revenue Operations Manager");
+    expect(result.person?.linkedinUrl).toBe("https://linkedin.com/in/alex");
+    expect(result.person?.enrichmentSource).toBe(
+      "CrustData + People Data Labs",
+    );
+    expect(result.trace.attempts.map(({ status }) => status)).toEqual([
+      "partial",
+      "hit",
+    ]);
   });
 
   test("a CrustData person error invokes People Data Labs exactly once", async () => {

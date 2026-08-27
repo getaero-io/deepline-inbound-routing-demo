@@ -92,6 +92,29 @@ export function numericValue(value: unknown): number | null {
   return range.length ? Math.max(...range) : null;
 }
 
+function employeeCountSignal(...values: unknown[]) {
+  for (const value of values) {
+    const raw = stringValue(value);
+    if (raw && /\d\s*(?:-|–|—|\+)\s*\d*\s*$/.test(raw)) continue;
+    const count = numericValue(value);
+    if (count !== null) return { count, range: null };
+  }
+  for (const value of values) {
+    const raw = stringValue(value);
+    if (!raw) continue;
+    const numbers = [...raw.matchAll(/\d[\d,]*/g)].map((match) =>
+      Number(match[0].replace(/,/g, "")),
+    );
+    if (
+      numbers.length &&
+      /(?:-|–|—|\+)/.test(raw) &&
+      numbers.every(Number.isFinite)
+    )
+      return { count: Math.min(...numbers), range: raw };
+  }
+  return { count: null, range: null };
+}
+
 function scalarString(value: unknown): string | null {
   const text = stringValue(value);
   if (text) return text;
@@ -105,8 +128,15 @@ function locationValue(value: unknown): string | null {
   if (!isRecord(location)) return stringValue(location);
   if (location.headquarters)
     return locationValue(location.headquarters);
+  const fullLocation =
+    stringValue(location.name) ?? stringValue(location.location);
+  if (fullLocation) return fullLocation;
   return (
-    [location.location, location.city, location.state, location.country]
+    [
+      location.city ?? location.locality,
+      location.state ?? location.region,
+      location.country,
+    ]
       .map(stringValue)
       .filter(Boolean)
       .join(", ") || null
@@ -151,18 +181,18 @@ function companyProfileFromCrust(
       : {};
     const current = isRecord(headcount.current) ? headcount.current : {};
     const name = stringValue(basic.company_name) ?? stringValue(basic.name);
-    const employeeCount = numericValue(
+    const employeeSignal = employeeCountSignal(
       headcount.total ??
         current.total ??
         current.count ??
-        current.range ??
-        headcount.range ??
         basic.employee_count ??
         basic.employeeCount,
+      current.range,
+      headcount.range,
     );
     if (
       !name ||
-      employeeCount === null ||
+      employeeSignal.count === null ||
       !providerDomainMatches(
         domain,
         basic.primary_domain,
@@ -184,7 +214,8 @@ function companyProfileFromCrust(
     return {
       name,
       domain,
-      employeeCount,
+      employeeCount: employeeSignal.count,
+      employeeRange: employeeSignal.range,
       salesTeamSize: numericValue(caseInsensitiveValue(byRole, "sales")),
       revenue: revenueValue(companyData.revenue),
       industry:
@@ -207,12 +238,14 @@ function companyProfileFromPdl(
   if (!isRecord(raw)) return null;
   const profile = isRecord(raw.data) ? raw.data : raw;
   const name = stringValue(profile.company_name) ?? stringValue(profile.name);
-  const employeeCount = numericValue(
-    profile.employee_count ?? profile.employeeCount ?? profile.size,
+  const employeeSignal = employeeCountSignal(
+    profile.employee_count,
+    profile.employeeCount,
+    profile.size,
   );
   if (
     !name ||
-    employeeCount === null ||
+    employeeSignal.count === null ||
     !providerDomainMatches(
       domain,
       profile.primary_domain,
@@ -222,17 +255,17 @@ function companyProfileFromPdl(
     )
   )
     return null;
-  const location = isRecord(profile.location)
-    ? [profile.location.city, profile.location.state, profile.location.country]
-        .map(stringValue)
-        .filter(Boolean)
-        .join(", ") || null
-    : stringValue(profile.location);
+  const location = locationValue(profile.location);
   const roles = isRecord(profile.roles) && isRecord(profile.roles.distribution)
     ? profile.roles.distribution
     : {};
-  const technologies = Array.isArray(profile.technologies)
-    ? profile.technologies
+  const roleCounts = isRecord(profile.employee_count_by_role)
+    ? profile.employee_count_by_role
+    : {};
+  const technologyPayload =
+    profile.technologies ?? profile.technology_names ?? profile.technology;
+  const technologies = Array.isArray(technologyPayload)
+    ? technologyPayload
         .map((value) =>
           typeof value === "string"
             ? stringValue(value)
@@ -246,13 +279,16 @@ function companyProfileFromPdl(
   return {
     name,
     domain,
-    employeeCount,
-    salesTeamSize: numericValue(roles.sales),
+    employeeCount: employeeSignal.count,
+    employeeRange: employeeSignal.range,
+    salesTeamSize: numericValue(roleCounts.sales ?? roles.sales),
     revenue:
       revenueValue(profile.annual_revenue) ??
       revenueValue(profile.revenue) ??
-      revenueValue(profile.estimated_revenue),
-    industry: stringValue(profile.industry),
+      revenueValue(profile.estimated_revenue) ??
+      revenueValue(profile.inferred_revenue),
+    industry:
+      stringValue(profile.industry_v2) ?? stringValue(profile.industry),
     location,
     technologies,
     enrichmentSource: "People Data Labs",
@@ -319,27 +355,18 @@ function personProfile(
     stringValue(profile.job_title_role) ??
     stringValue(profile.role) ??
     titleRole(title);
-  const location = isRecord(profile.location)
-    ? [profile.location.name, profile.location.city, profile.location.state, profile.location.country]
-        .map(stringValue)
-        .filter(Boolean)
-        .join(", ") || null
-    : stringValue(profile.location_name) ?? stringValue(profile.location);
+  const location =
+    locationValue(profile.location) ?? stringValue(profile.location_name);
   const providerName = [
     stringValue(profile.first_name),
     stringValue(profile.last_name),
   ]
     .filter(Boolean)
     .join(" ");
-  const submittedName = [input.firstName, input.lastName]
-    .map(stringValue)
-    .filter(Boolean)
-    .join(" ");
   const fullName =
     stringValue(profile.full_name) ??
     stringValue(profile.name) ??
-    stringValue(providerName) ??
-    stringValue(submittedName);
+    stringValue(providerName);
   const linkedinUrl =
     stringValue(profile.linkedin_url) ??
     stringValue(profile.linkedin_profile_url);
@@ -383,6 +410,30 @@ function attempt(
     status,
     durationMs: Math.max(0, Date.now() - startedAt),
     detail,
+  };
+}
+
+function mergePersonProfiles(
+  primary: PersonProfile,
+  fallback: PersonProfile,
+): PersonProfile {
+  const merged = {
+    fullName: primary.fullName ?? fallback.fullName,
+    email: primary.email,
+    title: primary.title ?? fallback.title,
+    seniority: primary.seniority ?? fallback.seniority,
+    role: primary.role ?? fallback.role,
+    location: primary.location ?? fallback.location,
+    linkedinUrl: primary.linkedinUrl ?? fallback.linkedinUrl,
+    enrichmentSource: "CrustData + People Data Labs",
+  };
+  return {
+    ...merged,
+    fullProfile: {
+      ...merged,
+      workEmail: merged.email,
+      matchBasis: "Exact work email",
+    },
   };
 }
 
@@ -457,6 +508,7 @@ export async function enrichPerson(
   runner: ToolRunner = executeTool,
 ): Promise<PersonWaterfallResult> {
   const attempts: ProviderAttempt[] = [];
+  let primaryPerson: PersonProfile | null = null;
   const startedAt = Date.now();
   try {
     const raw = await runner(PERSON_CRUST_TOOL, {
@@ -466,15 +518,25 @@ export async function enrichPerson(
         "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
     });
     const person = personProfile(raw, input, "CrustData");
-    if (person) {
+    if (person?.title) {
       attempts.push(
         attempt(1, "CrustData", PERSON_CRUST_TOOL, "hit", startedAt, "Exact-email person profile returned."),
         attempt(2, "People Data Labs", PERSON_PDL_TOOL, "skipped", Date.now(), "Skipped because CrustData returned an exact-email person profile."),
       );
       return { person, trace: { entity: "person", attempts } };
     }
+    primaryPerson = person;
     attempts.push(
-      attempt(1, "CrustData", PERSON_CRUST_TOOL, "miss", startedAt, "No exact-email person profile returned."),
+      attempt(
+        1,
+        "CrustData",
+        PERSON_CRUST_TOOL,
+        person ? "partial" : "miss",
+        startedAt,
+        person
+          ? "Exact-email identity returned without a title; continuing for professional fields."
+          : "No exact-email person profile returned.",
+      ),
     );
   } catch {
     attempts.push(
@@ -493,17 +555,23 @@ export async function enrichPerson(
       data_include:
         "full_name,first_name,last_name,work_email,job_title,job_title_role,job_title_levels,location_name,linkedin_url",
     });
-    const person = personProfile(raw, input, "People Data Labs");
+    const fallbackPerson = personProfile(raw, input, "People Data Labs");
+    const person =
+      primaryPerson && fallbackPerson
+        ? mergePersonProfiles(primaryPerson, fallbackPerson)
+        : fallbackPerson ?? primaryPerson;
     attempts.push(
       attempt(
         2,
         "People Data Labs",
         PERSON_PDL_TOOL,
-        person ? "hit" : "miss",
+        fallbackPerson ? "hit" : "miss",
         fallbackStartedAt,
-        person
+        fallbackPerson
           ? "Exact-email person profile returned."
-          : "No exact-email person profile returned.",
+          : primaryPerson
+            ? "No additional professional fields returned; keeping the verified primary identity."
+            : "No exact-email person profile returned.",
       ),
     );
     return { person, trace: { entity: "person", attempts } };
@@ -518,6 +586,6 @@ export async function enrichPerson(
         "Provider request failed; the person waterfall is exhausted.",
       ),
     );
-    return { person: null, trace: { entity: "person", attempts } };
+    return { person: primaryPerson, trace: { entity: "person", attempts } };
   }
 }

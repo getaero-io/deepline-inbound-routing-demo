@@ -15,6 +15,10 @@ const crm = (properties: Record<string, unknown>): HubSpotResult => ({
   contactId: "123",
   contactProperties: properties,
   revenue: null,
+  contactMatched: true,
+  companyMatched: false,
+  contactUnavailable: false,
+  companyUnavailable: false,
   matched: true,
 });
 
@@ -103,6 +107,8 @@ describe("lookupHubSpot", () => {
       title: "VP Sales",
       contactId: "contact-1",
       revenue: "10000000",
+      contactMatched: true,
+      companyMatched: true,
       matched: true,
     });
     expect(runner).toHaveBeenCalledTimes(2);
@@ -127,6 +133,85 @@ describe("lookupHubSpot", () => {
     const result = await lookupHubSpot("owner@example.com", "example.com", runner);
     expect(result.ownerId).toBe("owner-2");
     expect(result.contactId).toBe("contact-2");
+    expect(result.contactMatched).toBe(true);
+    expect(result.companyMatched).toBe(false);
     expect(result.matched).toBe(true);
+  });
+
+  test("distinguishes a company-only match from a contact match", async () => {
+    const runner = mock(async (_tool: string, input: Record<string, unknown>) =>
+      input.object_type === "contacts"
+        ? { results: [] }
+        : {
+            results: [
+              {
+                id: "company-2",
+                properties: { annualrevenue: "25000000" },
+              },
+            ],
+          },
+    );
+
+    const result = await lookupHubSpot("new@example.com", "example.com", runner);
+
+    expect(result.contactMatched).toBe(false);
+    expect(result.companyMatched).toBe(true);
+    expect(result.matched).toBe(true);
+  });
+
+  test("preserves per-record unavailability instead of reporting a false miss", async () => {
+    const runner = mock(async (_tool: string, input: Record<string, unknown>) => {
+      if (input.object_type === "contacts")
+        throw new Error("Contact search timed out");
+      return { results: [] };
+    });
+
+    const result = await lookupHubSpot("new@example.com", "example.com", runner);
+
+    expect(result.contactMatched).toBe(false);
+    expect(result.companyMatched).toBe(false);
+    expect(result.contactUnavailable).toBe(true);
+    expect(result.companyUnavailable).toBe(false);
+  });
+
+  test("uses a configured contact revenue value before account revenue", async () => {
+    const previous = process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY;
+    process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY =
+      "deepline_revenue";
+    try {
+      const runner = mock(
+        async (_tool: string, input: Record<string, unknown>) =>
+          input.object_type === "contacts"
+            ? {
+                results: [
+                  {
+                    id: "contact-3",
+                    properties: { deepline_revenue: "$10M-$25M" },
+                  },
+                ],
+              }
+            : {
+                results: [
+                  {
+                    id: "company-3",
+                    properties: { annualrevenue: "1000000" },
+                  },
+                ],
+              },
+      );
+
+      const result = await lookupHubSpot(
+        "revenue@example.com",
+        "example.com",
+        runner,
+      );
+
+      expect(result.revenue).toBe("$10M-$25M");
+    } finally {
+      if (previous === undefined)
+        delete process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY;
+      else
+        process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY = previous;
+    }
   });
 });

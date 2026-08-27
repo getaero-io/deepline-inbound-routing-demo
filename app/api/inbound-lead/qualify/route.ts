@@ -52,6 +52,10 @@ const EMPTY_CRM: HubSpotResult & { unavailable: boolean } = {
   contactId: null,
   contactProperties: null,
   revenue: null,
+  contactMatched: false,
+  companyMatched: false,
+  contactUnavailable: true,
+  companyUnavailable: true,
   matched: false,
   unavailable: true,
 };
@@ -160,9 +164,21 @@ function waterfallSummary(
 ) {
   const hit = trace.attempts.find((attempt) => attempt.status === "hit");
   if (hit) return `${hit.provider} returned the selected ${trace.entity} profile.`;
+  const partial = trace.attempts.find((attempt) => attempt.status === "partial");
+  if (partial)
+    return `${partial.provider} returned a verified partial ${trace.entity} profile.`;
   if (trace.attempts.some((attempt) => attempt.status === "pending"))
     return `${trace.entity === "company" ? "Company" : "Contact"} enrichment is still running.`;
   return `The ${trace.entity} waterfall completed without a usable match.`;
+}
+
+function crmRecordSummary(
+  label: "Contact" | "Account",
+  matched: boolean,
+  unavailable: boolean,
+) {
+  if (unavailable) return `${label} lookup was unavailable.`;
+  return matched ? `${label} record matched.` : `No ${label.toLowerCase()} record matched.`;
 }
 
 function companyForClient(
@@ -174,6 +190,7 @@ function companyForClient(
     name: profile?.name ?? null,
     domain,
     employeeCount: profile?.employeeCount ?? null,
+    employeeRange: profile?.employeeRange ?? null,
     salesTeamSize: profile?.salesTeamSize ?? null,
     revenue: profile?.revenue ?? null,
     industry: profile?.industry ?? null,
@@ -242,6 +259,10 @@ function makePayload(input: {
         (input.crm.title ? "HubSpot CRM" : "No verified person match"),
       identityStatus: person ? ("verified" as const) : ("not_verified" as const),
       hubspotSync: input.hubspotSync,
+      hubspotContactMatched: input.crm.contactMatched,
+      hubspotCompanyMatched: input.crm.companyMatched,
+      hubspotContactUnavailable: input.crm.contactUnavailable,
+      hubspotCompanyUnavailable: input.crm.companyUnavailable,
     },
     qualification: {
       fitScore: input.route.fitScore,
@@ -256,14 +277,22 @@ function makePayload(input: {
           name: "HubSpot CRM via Deepline SDK",
           status: input.crm.unavailable
             ? "unavailable"
+            : input.crm.contactUnavailable || input.crm.companyUnavailable
+              ? "partial"
             : input.crm.matched
               ? "matched"
               : "no_match",
           detail: input.crm.unavailable
             ? "CRM was unavailable; routing continued."
-            : input.crm.matched
-              ? "Existing CRM records and ownership were checked."
-              : "No matching contact or account was returned.",
+            : `${crmRecordSummary(
+                "Contact",
+                input.crm.contactMatched,
+                input.crm.contactUnavailable,
+              )} ${crmRecordSummary(
+                "Account",
+                input.crm.companyMatched,
+                input.crm.companyUnavailable,
+              )}`,
         },
         {
           name: "Deepline enrichment",
@@ -293,6 +322,7 @@ function makePayload(input: {
         title,
         company: {
           employeeCount: company?.employeeCount ?? null,
+          employeeRange: company?.employeeRange ?? null,
           salesTeamSize: company?.salesTeamSize ?? null,
           industry: company?.industry ?? null,
           location: company?.location ?? null,
@@ -309,7 +339,10 @@ function makePayload(input: {
           },
           {
             name: "Company size",
-            value: company?.employeeCount.toLocaleString() ?? "Not returned",
+            value:
+              company?.employeeRange ??
+              company?.employeeCount.toLocaleString() ??
+              "Not returned",
           },
           {
             name: "Sales team",
@@ -416,6 +449,10 @@ export async function POST(request: Request) {
         }),
         isFallback: false,
       };
+    } else if (crm.contactUnavailable || crm.companyUnavailable) {
+      route = fallbackDecision(
+        "HubSpot relationship verification was incomplete, so the safe route goes to Anand rather than bypassing a possible existing owner.",
+      );
     } else {
       const resolution = await resolveFastEnrichmentRoute({
         companyWork,
@@ -473,11 +510,26 @@ export async function POST(request: Request) {
     const technologyAuth = authFromTechnologies(
       finalCompany?.company?.technologies ?? [],
     );
+    const refreshedSignals = routeLead({
+      company: finalCompany?.company ?? null,
+      person: finalPerson?.person ?? null,
+      crmTitle: finalCrm.title,
+      existingCustomer: finalCrm.existingCustomer,
+      owner: configuredOwner(finalCrm.ownerId),
+    });
+    const enrichedRoute: RouteDecision = {
+      ...stableRoute,
+      fitScore: refreshedSignals.fitScore,
+      tier: refreshedSignals.tier,
+      signals: refreshedSignals.signals,
+      timezone: refreshedSignals.timezone,
+      title: refreshedSignals.title,
+    };
     const corePayload = makePayload({
       domain,
       leadId,
       started,
-      route: stableRoute,
+      route: enrichedRoute,
       crm: finalCrm,
       companyResult: finalCompany,
       personResult: finalPerson,
@@ -503,13 +555,14 @@ export async function POST(request: Request) {
         name: corePayload.company.name,
         domain: corePayload.company.domain,
         employeeCount: corePayload.company.employeeCount,
+        employeeRange: corePayload.company.employeeRange,
         salesTeamSize: corePayload.company.salesTeamSize,
       },
       route: {
         owner: stableRoute.owner,
-        fitScore: stableRoute.fitScore,
-        tier: stableRoute.tier,
-        signals: stableRoute.signals,
+        fitScore: enrichedRoute.fitScore,
+        tier: enrichedRoute.tier,
+        signals: enrichedRoute.signals,
       },
     });
     const [authOutcome, hubspotOutcome] = await Promise.allSettled([
@@ -529,7 +582,7 @@ export async function POST(request: Request) {
       domain,
       leadId,
       started,
-      route: stableRoute,
+      route: enrichedRoute,
       crm: finalCrm,
       companyResult: finalCompany,
       personResult: finalPerson,

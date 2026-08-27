@@ -10,6 +10,10 @@ export type HubSpotResult = {
   contactId: string | null;
   contactProperties: JsonRecord | null;
   revenue: string | null;
+  contactMatched: boolean;
+  companyMatched: boolean;
+  contactUnavailable: boolean;
+  companyUnavailable: boolean;
   matched: boolean;
 };
 
@@ -118,7 +122,13 @@ export async function lookupHubSpot(
     title: text(contact?.jobtitle),
     contactId: text(contactRow?.id),
     contactProperties: contact,
-    revenue: text(company?.annualrevenue),
+    revenue:
+      (revenueProperty ? text(contact?.[revenueProperty]) : null) ??
+      text(company?.annualrevenue),
+    contactMatched: Boolean(contact),
+    companyMatched: Boolean(company),
+    contactUnavailable: outcomes[0].status === "rejected",
+    companyUnavailable: outcomes[1].status === "rejected",
     matched: Boolean(contact || company),
   };
 }

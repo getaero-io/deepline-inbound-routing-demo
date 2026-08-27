@@ -8,6 +8,7 @@ type InboundLead = {
     name: string | null;
     domain: string;
     employeeCount: number | null;
+    employeeRange: string | null;
     salesTeamSize: number | null;
   };
   route: {

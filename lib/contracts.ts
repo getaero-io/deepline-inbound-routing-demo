@@ -4,7 +4,7 @@ export type ProviderAttempt = {
   order: number;
   provider: string;
   tool: string;
-  status: "hit" | "miss" | "error" | "skipped";
+  status: "hit" | "partial" | "miss" | "error" | "skipped";
   durationMs: number;
   detail: string;
 };
@@ -18,6 +18,7 @@ export type CompanyProfile = {
   name: string;
   domain: string;
   employeeCount: number;
+  employeeRange: string | null;
   salesTeamSize: number | null;
   revenue: string | null;
   industry: string | null;

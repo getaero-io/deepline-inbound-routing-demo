@@ -10,6 +10,7 @@ const company = (overrides: Partial<CompanyProfile> = {}): CompanyProfile => ({
   name: "Example",
   domain: "example.com",
   employeeCount: 40,
+  employeeRange: null,
   salesTeamSize: 5,
   revenue: null,
   industry: "Software",
