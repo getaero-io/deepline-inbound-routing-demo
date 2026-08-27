@@ -4,27 +4,18 @@ A forkable Next.js reference app for real-time inbound routing with the Deepline
 
 ## The SDK pattern
 
-The app connects to Deepline once, then runs an ordered CrustData → People Data Labs waterfall. People Data Labs runs only when CrustData misses, fails, or returns no usable profile.
+The app connects to Deepline once, then runs ordered CrustData → People Data Labs waterfalls. Company enrichment advances after a miss, error, or unusable profile. Contact enrichment also advances when CrustData verifies the exact email but omits required professional fields; verified fields from both sources are then merged.
 
 ```ts
-import { Deepline } from "deepline";
+import { enrichCompany, enrichPerson } from "@/lib/enrichment";
 
-const deepline = await Deepline.connect({
-  apiKey: process.env.DEEPLINE_API_KEY!,
-  timeout: 3_600,
-  maxRetries: 0,
-});
-
-const crust = await deepline.tools.execute("crustdata_v3_company_enrich", {
-  domains: [domain],
-});
-
-if (!verifiedCompany(crust.toolResponse.raw)) {
-  await deepline.tools.execute("peopledatalabs_enrich_company", { domain });
-}
+const [companyResult, personResult] = await Promise.all([
+  enrichCompany(domain),
+  enrichPerson({ email, firstName, lastName }),
+]);
 ```
 
-`verifiedCompany` is the app's small normalization check. The cached SDK client lives in [`lib/deepline.ts`](lib/deepline.ts); the two explicit company and contact waterfalls live in [`lib/enrichment.ts`](lib/enrichment.ts).
+The cached `Deepline.connect()` client and `tools.execute()` wrapper live in [`lib/deepline.ts`](lib/deepline.ts). The company and contact waterfalls, exact-match inputs, requested fields, normalization, and merge rules live in [`lib/enrichment.ts`](lib/enrichment.ts).
 
 CrustData, People Data Labs, and HubSpot connections are owned by the configured Deepline workspace. The application does not handle their vendor credentials. `DEEPLINE_API_KEY` is the only required data credential.
 
@@ -116,7 +107,7 @@ Confirm that:
 
 1. A booking route appears even while deeper enrichment is pending.
 2. A known HubSpot owner remains the owner.
-3. The SDK waterfall shows each source as `hit`, `miss`, `skipped`, or `error`.
+3. The SDK waterfall shows each source as `hit`, `partial`, `miss`, `skipped`, or `error`.
 4. Contact enrichment appears only after an exact work-email match.
 5. Background data updates the page when KV is configured.
 6. HubSpot fills supported empty fields without overwriting populated fields.
