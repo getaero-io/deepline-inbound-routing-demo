@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { authProviderLabel } from "../lib/presentation";
 
-type Result = {
+export type Result = {
   company: {
     name: string | null;
     domain: string;
@@ -86,8 +86,12 @@ type Result = {
   enrichment?: { leadId: string; status: "pending" | "completed" | "failed" | "unavailable" };
 };
 
-export function InboundRouting() {
-  const [result, setResult] = useState<Result | null>(null);
+export function InboundRouting({
+  initialResult = null,
+}: {
+  initialResult?: Result | null;
+} = {}) {
+  const [result, setResult] = useState<Result | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const isChiragRoute = result?.route.owner.name === "Chirag Toprani";
@@ -297,38 +301,6 @@ export function InboundRouting() {
             </div>
           )}
         </section>
-        {result.trace.waterfalls && (
-          <details className="evidence sdk-waterfall" open>
-            <summary>Deepline SDK waterfall</summary>
-            <p>
-              Company and contact checks run together. Inside each lane,
-              People Data Labs runs only when CrustData does not return a usable match.
-            </p>
-            {result.trace.waterfalls.map((waterfall) => (
-              <div className="waterfall-lane" key={waterfall.entity}>
-                <h3>{waterfall.entity} enrichment</h3>
-                {waterfall.attempts.map((attempt) => (
-                  <div className="waterfall-step" key={`${waterfall.entity}-${attempt.order}`}>
-                    <span className="waterfall-order">{attempt.order}</span>
-                    <div>
-                      <b>{attempt.provider}</b>
-                      <code>{attempt.tool}</code>
-                      <small>{attempt.detail}</small>
-                    </div>
-                    <div className="waterfall-outcome">
-                      <em data-status={attempt.status}>{attempt.status}</em>
-                      {attempt.durationMs > 0 && <small>{attempt.durationMs}ms</small>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ))}
-            <p className="sdk-note">
-              Every provider call above uses <code>deepline.tools.execute()</code>.
-              Provider credentials stay in the Deepline workspace.
-            </p>
-          </details>
-        )}
         {result.person && (
           <details className="evidence person-enrichment" open>
             <summary>Live contact enrichment</summary>
@@ -368,6 +340,38 @@ export function InboundRouting() {
               <span>Fill-only sync <b>{result.contact.hubspotSync === "updated" ? "Updated missing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "In progress" : "Not applicable"}</b></span>
             </div>
             <p className="contact-note">CRM fields stay separate from live enrichment. When a contact exists, only empty supported fields are filled; populated fields are never overwritten.</p>
+          </details>
+        )}
+        {result.trace.waterfalls && (
+          <details className="evidence sdk-waterfall">
+            <summary>Deepline SDK waterfall</summary>
+            <p>
+              Company and contact checks run together. Inside each lane,
+              People Data Labs runs only when CrustData does not return a usable match.
+            </p>
+            {result.trace.waterfalls.map((waterfall) => (
+              <div className="waterfall-lane" key={waterfall.entity}>
+                <h3>{waterfall.entity} enrichment</h3>
+                {waterfall.attempts.map((attempt) => (
+                  <div className="waterfall-step" key={`${waterfall.entity}-${attempt.order}`}>
+                    <span className="waterfall-order">{attempt.order}</span>
+                    <div>
+                      <b>{attempt.provider}</b>
+                      <code>{attempt.tool}</code>
+                      <small>{attempt.detail}</small>
+                    </div>
+                    <div className="waterfall-outcome">
+                      <em data-status={attempt.status}>{attempt.status}</em>
+                      {attempt.durationMs > 0 && <small>{attempt.durationMs}ms</small>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="sdk-note">
+              Every provider call above uses <code>deepline.tools.execute()</code>.
+              Provider credentials stay in the Deepline workspace.
+            </p>
           </details>
         )}
         {result.company.auth && (

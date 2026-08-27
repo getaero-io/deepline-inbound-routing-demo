@@ -91,6 +91,7 @@ h1 em {
 .card button,
 .owner a.calendar-cta {
   display: inline-block;
+  min-height: 44px;
   border: 0;
   margin-top: 24px;
   padding: 14px 18px;
@@ -412,8 +413,21 @@ h1 em {
 @media (max-width: 800px) {
   .shell {
     grid-template-columns: 1fr;
-    padding: 52px 20px;
-    gap: 42px;
+    padding: 32px 20px;
+    gap: 28px;
+  }
+  .copy h1 {
+    margin: 14px 0 18px;
+    font-size: 40px;
+  }
+  .copy p {
+    margin-bottom: 0;
+  }
+  .copy ul {
+    display: none;
+  }
+  .card {
+    padding: 28px;
   }
   .owner {
     align-items: start;
