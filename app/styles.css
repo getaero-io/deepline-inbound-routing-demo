@@ -213,15 +213,38 @@ h1 em {
   width: 100%;
   margin-top: 2px;
 }
-.calendar-embed iframe {
+.calendar-embed a.calendar-cta {
+  width: 100%;
+  margin: 0 0 10px;
+}
+.calendar-frame {
+  position: relative;
+  min-height: 660px;
+  overflow: hidden;
+  border: 1px solid #b7b9c8;
+  background: var(--paper);
+}
+.calendar-frame iframe {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 660px;
-  border: 1px solid var(--line);
-  background: var(--paper);
+  border: 0;
+  background: #fff;
 }
-.calendar-embed a.calendar-cta {
-  margin-top: 10px;
+.calendar-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
 }
 .result > button {
   background: transparent;
@@ -410,7 +433,7 @@ h1 em {
   outline: 3px solid var(--ink);
   outline-offset: 3px;
 }
-@media (max-width: 800px) {
+@media (max-width: 960px) {
   .shell {
     grid-template-columns: 1fr;
     padding: 32px 20px;
@@ -433,7 +456,14 @@ h1 em {
     align-items: start;
     flex-direction: column;
   }
-  .calendar-embed iframe {
+  .calendar-frame {
+    width: calc(100% + 96px);
+    min-height: 620px;
+    margin-left: -48px;
+    border-right: 0;
+    border-left: 0;
+  }
+  .calendar-frame iframe {
     height: 620px;
   }
   .owner a.calendar-cta {

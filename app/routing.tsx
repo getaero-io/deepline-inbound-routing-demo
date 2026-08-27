@@ -4,6 +4,70 @@ import { FormEvent, useEffect, useState } from "react";
 
 import { authProviderLabel } from "../lib/presentation";
 
+const EMBEDDED_CALENDAR_OWNERS = new Set(["Jai Toor", "Chirag Toprani"]);
+
+function isCalendlyUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "calendly.com";
+  } catch {
+    return false;
+  }
+}
+
+function CalendarEmbed({
+  bookingUrl,
+  ownerName,
+}: {
+  bookingUrl: string;
+  ownerName: string;
+}) {
+  const [loaded, setLoaded] = useState(false);
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setSlow(false);
+  }, [bookingUrl]);
+
+  useEffect(() => {
+    if (loaded) return;
+    const timer = window.setTimeout(() => setSlow(true), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [bookingUrl, loaded]);
+
+  return (
+    <div className="calendar-embed">
+      <a
+        className="calendar-cta"
+        href={bookingUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${ownerName} calendar in a new tab`}
+      >
+        Open calendar in a new tab<span aria-hidden="true"> ↗</span>
+      </a>
+      <div className="calendar-frame">
+        {!loaded && (
+          <div className="calendar-loading" role="status" aria-live="polite">
+            {slow
+              ? "Calendar couldn’t load here — open it in a new tab."
+              : `Loading ${ownerName}’s available times…`}
+          </div>
+        )}
+        <iframe
+          src={bookingUrl}
+          title={`Book time with ${ownerName}`}
+          loading="eager"
+          referrerPolicy="no-referrer"
+          onLoad={() => setLoaded(true)}
+          onError={() => setSlow(true)}
+        />
+      </div>
+    </div>
+  );
+}
+
 export type Result = {
   company: {
     name: string | null;
@@ -94,7 +158,11 @@ export function InboundRouting({
   const [result, setResult] = useState<Result | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const isChiragRoute = result?.route.owner.name === "Chirag Toprani";
+  const hasEmbeddedCalendar = Boolean(
+    result &&
+      EMBEDDED_CALENDAR_OWNERS.has(result.route.owner.name) &&
+      isCalendlyUrl(result.route.owner.bookingUrl),
+  );
   useEffect(() => {
     const leadId = result?.enrichment?.leadId;
     if (!leadId || result.enrichment?.status === "completed") return;
@@ -268,37 +336,26 @@ export function InboundRouting({
             </small>
             <h2>{result.route.owner.name}</h2>
             <p className="owner-copy">
-              {isChiragRoute
+              {hasEmbeddedCalendar
                 ? "Choose a time below—your routing is complete."
                 : "Your route is ready. Choose a time that works for you."}
             </p>
           </div>
-          {!isChiragRoute && (
+          {!hasEmbeddedCalendar && (
             <a
               className="calendar-cta"
               href={result.route.owner.bookingUrl}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
             >
               Open calendar in a new tab ↗
             </a>
           )}
-          {isChiragRoute && (
-            <div className="calendar-embed">
-              <iframe
-                src={result.route.owner.bookingUrl}
-                title="Book time with Chirag Toprani"
-                loading="eager"
-              />
-              <a
-                className="calendar-cta"
-                href={result.route.owner.bookingUrl}
-                target="_blank"
-                rel="noreferrer"
-              >
-                Open calendar in a new tab ↗
-              </a>
-            </div>
+          {hasEmbeddedCalendar && (
+            <CalendarEmbed
+              bookingUrl={result.route.owner.bookingUrl}
+              ownerName={result.route.owner.name}
+            />
           )}
         </section>
         {result.person && (

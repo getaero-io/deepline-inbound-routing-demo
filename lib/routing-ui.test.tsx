@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { InboundRouting } from "../app/routing";
 
 describe("inbound routing result UI", () => {
-  test("renders canonical enrichment values and the routed calendar CTA", () => {
+  test("renders canonical enrichment values and Jai's embedded calendar", () => {
     const markup = renderToStaticMarkup(
       <InboundRouting
         initialResult={{
@@ -98,11 +98,19 @@ describe("inbound routing result UI", () => {
       "No provider found",
       "CRM account",
       "Matched",
-      "Open calendar in a new tab ↗",
+      "Open calendar in a new tab",
     ])
       expect(markup).toContain(expected);
     expect(markup).toContain('class="calendar-cta"');
     expect(markup).toContain('href="https://calendly.com/jptoor/30min"');
+    expect(markup).toContain('class="calendar-embed"');
+    expect(markup).toContain('<iframe');
+    expect(markup).toContain('src="https://calendly.com/jptoor/30min"');
+    expect(markup).toContain('title="Book time with Jai Toor"');
+    expect(markup).toContain('referrerPolicy="no-referrer"');
+    expect(markup).toContain(
+      'aria-label="Open Jai Toor calendar in a new tab"',
+    );
     expect(markup.indexOf("Live contact enrichment")).toBeLessThan(
       markup.indexOf("Deepline SDK waterfall"),
     );
