@@ -15,7 +15,11 @@ export async function GET(
     return NextResponse.json({ status: "unavailable" }, { status: 503 });
   const response = await fetch(
     `${url}/get/${encodeURIComponent(`inbound-enrichment:${leadId}`)}`,
-    { headers: { authorization: `Bearer ${token}` }, cache: "no-store" },
+    {
+      headers: { authorization: `Bearer ${token}` },
+      cache: "no-store",
+      signal: AbortSignal.timeout(1_800),
+    },
   );
   const body = (await response.json().catch(() => null)) as {
     result?: string | null;

@@ -42,6 +42,17 @@ type Result = {
     hubspotSync?: "pending" | "updated" | "not_needed" | "not_applicable" | "failed";
   };
   trace: {
+    waterfalls?: Array<{
+      entity: "company" | "person";
+      attempts: Array<{
+        order: number;
+        provider: string;
+        tool: string;
+        status: "hit" | "miss" | "error" | "skipped" | "pending";
+        durationMs: number;
+        detail: string;
+      }>;
+    }>;
     providers: Array<{ name: string; status: string; detail: string }>;
     routing: {
       appliedRule: string;
@@ -78,13 +89,15 @@ export function InboundRouting() {
       try {
         const response = await fetch(`/api/inbound-lead/enrichment/${leadId}`, {
           cache: "no-store",
+          signal: AbortSignal.timeout(2_500),
         });
         const update = (await response.json().catch(() => ({}))) as Partial<Result> & {
           status?: "pending" | "completed" | "failed" | "unavailable";
           error?: string;
         };
         if (cancelled) return;
-        if (update.status === "completed") {
+        const pollStatus = update.enrichment?.status ?? update.status;
+        if (pollStatus === "completed") {
           setResult((current) =>
             current
               ? {
@@ -94,21 +107,39 @@ export function InboundRouting() {
                   qualification: update.qualification ?? current.qualification,
                   person: update.person ?? current.person,
                   contact: update.contact ?? current.contact,
+                  route: update.route ?? current.route,
                   trace: update.trace ?? current.trace,
+                  // Late enrichment must not rewrite how long the booking route took.
+                  elapsedMs: current.elapsedMs,
                   enrichment: { leadId, status: "completed" },
                 }
               : current,
           );
           return;
         }
-        if (update.status === "failed" || update.status === "unavailable" || attempts >= 18) {
+        if (pollStatus === "pending" && (update.company || update.person || update.contact)) {
+          setResult((current) =>
+            current
+              ? {
+                  ...current,
+                  company: update.company ?? current.company,
+                  qualification: update.qualification ?? current.qualification,
+                  person: update.person ?? current.person,
+                  contact: update.contact ?? current.contact,
+                  trace: update.trace ?? current.trace,
+                  enrichment: { leadId, status: "pending" },
+                }
+              : current,
+          );
+        }
+        if (pollStatus === "failed" || pollStatus === "unavailable" || attempts >= 18) {
           setResult((current) =>
             current
               ? {
                   ...current,
                   enrichment: {
                     leadId,
-                    status: update.status === "unavailable" ? "unavailable" : "failed",
+                    status: pollStatus === "unavailable" ? "unavailable" : "failed",
                   },
                   trace: update.trace ?? current.trace,
                 }
@@ -167,7 +198,10 @@ export function InboundRouting() {
         </div>
         <div className="company">
           {result.company.logoUrl ? (
-            <img src={result.company.logoUrl} alt="" />
+            <img
+              src={result.company.logoUrl}
+              alt={`${result.company.name || result.company.domain} logo`}
+            />
           ) : (
             <b>{(result.company.name || result.company.domain)[0]}</b>
           )}
@@ -243,16 +277,37 @@ export function InboundRouting() {
             </div>
           )}
         </section>
-        {result.company.auth && (
-          <section className="evidence" aria-label="Authentication stack fingerprint">
-            <small>AUTHENTICATION STACK</small>
-            <h3>{result.company.auth.provider ?? "No provider found"}</h3>
-            <p>{result.company.auth.detail}</p>
-            <div className="evidence-grid">
-              <span>Confidence <b>{result.company.auth.confidence}</b></span>
-              <span>Source <b>{result.company.auth.source.replace("_", " ")}</b></span>
-            </div>
-          </section>
+        {result.trace.waterfalls && (
+          <details className="evidence sdk-waterfall" open>
+            <summary>Deepline SDK waterfall</summary>
+            <p>
+              Company and contact checks run together. Inside each lane,
+              People Data Labs runs only when CrustData does not return a usable match.
+            </p>
+            {result.trace.waterfalls.map((waterfall) => (
+              <div className="waterfall-lane" key={waterfall.entity}>
+                <h3>{waterfall.entity} enrichment</h3>
+                {waterfall.attempts.map((attempt) => (
+                  <div className="waterfall-step" key={`${waterfall.entity}-${attempt.order}`}>
+                    <span className="waterfall-order">{attempt.order}</span>
+                    <div>
+                      <b>{attempt.provider}</b>
+                      <code>{attempt.tool}</code>
+                      <small>{attempt.detail}</small>
+                    </div>
+                    <div className="waterfall-outcome">
+                      <em data-status={attempt.status}>{attempt.status}</em>
+                      {attempt.durationMs > 0 && <small>{attempt.durationMs}ms</small>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="sdk-note">
+              Every provider call above uses <code>deepline.tools.execute()</code>.
+              Provider credentials stay in the Deepline workspace.
+            </p>
+          </details>
         )}
         {result.person && (
           <details className="evidence person-enrichment" open>
@@ -272,23 +327,15 @@ export function InboundRouting() {
             )}
           </details>
         )}
-        {result.contact && (
-          <details className="evidence contact-enrichment" open>
-            <summary>Routing handoff</summary>
-            <p className={`contact-verdict ${result.contact.identityStatus}`}>
-              {result.contact.identityStatus === "verified"
-                ? "Live enrichment is verified and ready for routing"
-                : "Company verification is complete; contact identity was not returned"}
-            </p>
-            <div className="evidence-grid">
-              <span>Company revenue <b>{result.contact.revenue || "Not returned by sources"}</b></span>
-              <span>Calendar offered <b>{result.contact.calendarOwner}</b></span>
-            </div>
-            {result.contact.identityStatus === "not_verified" && (
-              <p className="contact-note">The route uses verified company and CRM signals only. We do not infer a title, seniority, or person record without an exact email match.</p>
-            )}
-          </details>
-        )}
+        <details className="evidence company-enrichment" open>
+          <summary>Live company enrichment</summary>
+          <div className="evidence-grid">
+            <span>People <b>{result.company.employeeCount?.toLocaleString() || "Not returned"}</b></span>
+            <span>Revenue <b>{result.contact?.revenue || "Not returned"}</b></span>
+            <span>Industry <b>{result.trace.routing.company.industry || "Not returned"}</b></span>
+            <span>Geo <b>{result.trace.routing.company.location || "Not returned"}</b></span>
+          </div>
+        </details>
         {result.contact && (
           <details className="evidence" open>
             <summary>HubSpot record</summary>
@@ -299,9 +346,20 @@ export function InboundRouting() {
             <p className="contact-note">CRM fields stay separate from live enrichment. When a contact exists, only empty supported fields are filled; populated fields are never overwritten.</p>
           </details>
         )}
+        {result.company.auth && (
+          <details className="evidence" aria-label="Optional authentication stack fingerprint">
+            <summary>Optional custom signal · authentication stack</summary>
+            <h3>{result.company.auth.provider ?? "No public fingerprint found"}</h3>
+            <p>{result.company.auth.detail}</p>
+            <div className="evidence-grid">
+              <span>Confidence <b>{result.company.auth.confidence}</b></span>
+              <span>Source <b>{result.company.auth.source.replaceAll("_", " ")}</b></span>
+            </div>
+          </details>
+        )}
         <details className="evidence">
           <summary>Show live routing evidence</summary>
-          <h3>Parallel APIs</h3>
+          <h3>Supporting checks</h3>
           {result.trace.providers.map((provider) => (
             <div className="evidence-row" key={provider.name}>
               <b>{provider.name}</b>
@@ -369,8 +427,12 @@ export function InboundRouting() {
         )}
         {result.person?.fullProfile && (
           <details className="evidence full-enrichment">
-            <summary>Full person enrichment payload</summary>
-            <p>Only an exact work-email match is shown here.</p>
+            <summary>Professional contact payload</summary>
+            <p>
+              Only professional fields from an exact work-email match are
+              requested and shown. Personal emails and phone numbers never
+              reach the browser.
+            </p>
             <pre>{JSON.stringify(result.person.fullProfile, null, 2)}</pre>
           </details>
         )}
@@ -378,8 +440,9 @@ export function InboundRouting() {
           <summary>How this route was chosen</summary>
           <ol>
             <li>A confirmed HubSpot owner always wins and keeps the relationship intact.</li>
-            <li>Existing customers and deployment roles go to Anand.</li>
-            <li>GTM roles, sales teams over 20, or companies with 250+ people go to Jai.</li>
+            <li>Existing customers go to Anand.</li>
+            <li>Sales teams over 20 or companies with 250+ people go to Jai.</li>
+            <li>Deployment roles go to Anand; GTM systems roles go to Jai.</li>
             <li>Other verified companies go to Chirag.</li>
             <li>If no confident route is available within five seconds, Anand is the safe default while enrichment continues.</li>
           </ol>
@@ -417,7 +480,7 @@ export function InboundRouting() {
       {busy && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>
-          <span>Checking your account, company, and existing owner in parallel.</span>
+          <span>Checking HubSpot while Deepline runs CrustData → PDL on misses.</span>
           <span>We’ll always give you a person to book with.</span>
         </div>
       )}

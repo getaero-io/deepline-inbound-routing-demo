@@ -1,30 +1,72 @@
 # Deepline inbound routing demo
 
-A standalone Next.js inbound form that takes only a first name, last name, and work email—then verifies the account, preserves existing CRM ownership, enriches company and contact signals, and presents the right Deepline calendar. The fast route returns immediately; deeper enrichment and non-destructive HubSpot contact updates continue in the background.
+A forkable Next.js reference app for real-time inbound routing with the Deepline SDK. A visitor enters a name and work email, receives a booking route immediately, and sees company, contact, CRM, and optional technical signals update as they arrive.
 
-## What a visitor experiences
+## The SDK pattern
 
-1. Enter a name and work email.
-2. Receive a matching Deepline expert and booking route, normally in a few seconds.
-3. See clear evidence: verified person data when an exact email match exists, company verification when it does not, and the data still arriving after a fast route.
-4. For Chirag routes, book directly in the embedded calendar.
+The app connects to Deepline once, then runs an ordered CrustData → People Data Labs waterfall. People Data Labs runs only when CrustData misses, fails, or returns no usable profile.
 
-The UI never represents company data as a verified person profile. If no exact work-email match is returned, it says so explicitly and still keeps the booking route available.
+```ts
+import { Deepline } from "deepline";
 
-The routing evidence also shows a non-blocking authentication-stack fingerprint
-when available (for example WorkOS, Auth0, Okta, Clerk, or Cognito). It first
-uses the returned technology profile, then performs a short public-site scan
-only after routing. “No provider found” means no public fingerprint was
-detected; it is not evidence that a company has no authentication provider.
+const deepline = await Deepline.connect({
+  apiKey: process.env.DEEPLINE_API_KEY!,
+  timeout: 3_600,
+  maxRetries: 0,
+});
 
-## Routing order
+const crust = await deepline.tools.execute("crustdata_v3_company_enrich", {
+  domains: [domain],
+});
 
-1. Preserve a configured HubSpot owner.
-2. Existing customers and deployment roles route to Anand.
-3. Sales team above 20, company size above 250, and GTM systems roles route to Jai.
-4. SMB and incomplete profiles route to Chirag.
+if (!verifiedCompany(crust.toolResponse.raw)) {
+  await deepline.tools.execute("peopledatalabs_enrich_company", { domain });
+}
+```
 
-The public fit score uses firmographic and persona signals. It deliberately does not expose CRM relationship status.
+`verifiedCompany` is the app's small normalization check. The cached SDK client lives in [`lib/deepline.ts`](lib/deepline.ts); the two explicit company and contact waterfalls live in [`lib/enrichment.ts`](lib/enrichment.ts).
+
+CrustData, People Data Labs, and HubSpot connections are owned by the configured Deepline workspace. The application does not handle their vendor credentials. `DEEPLINE_API_KEY` is the only required data credential.
+
+## Change the data sources
+
+The provider order and Deepline tool IDs are declared together in `lib/enrichment.ts`. To try another source:
+
+1. Find the provider tool in Deepline.
+2. Add or replace one entry in the ordered waterfall.
+3. Normalize a successful result into the small company or person contract.
+
+The route, UI, timeout behavior, and CRM logic do not need to change. A successful first step records the later step as `skipped`; a miss advances to the next source. Provider errors are evidence, not visitor-facing blockers.
+
+## Runtime flow
+
+1. Validate the name and work email.
+2. Check HubSpot ownership through the Deepline SDK.
+3. Run CrustData first for company and contact enrichment.
+4. Run People Data Labs only for an unresolved company or exact-email person miss.
+5. Preserve a mapped CRM owner or apply the routing rules.
+6. Return a calendar before the five-second route deadline.
+7. Continue unfinished enrichment in the background and update the result page.
+
+The visible result keeps these concerns separate:
+
+- **Live contact enrichment** — exact work-email identity, title, seniority, role, location, and source.
+- **Company enrichment** — firmographics and the raw provider payload used by the decision.
+- **HubSpot record** — CRM match and fill-only sync status. Populated fields are never overwritten.
+- **Optional signals** — Brandfetch logo and public authentication fingerprinting. These never determine whether the visitor can book.
+
+If every external source fails or exceeds the deadline, the visitor still receives the safe default calendar while the trace records what happened.
+
+## Routing rules
+
+1. A configured HubSpot owner wins.
+2. Existing customers route to Anand.
+3. Sales teams above 20 and companies with at least 250 employees route to Jai.
+4. Deployment/customer-success roles route to Anand; GTM systems roles route to Jai.
+5. Other verified SMB accounts route to Chirag.
+6. An unresolved route defaults to Anand before five seconds.
+
+The fit score uses firmographic and persona signals. It does not expose CRM relationship status.
 
 ## Run locally
 
@@ -34,84 +76,58 @@ bun install
 bun run dev
 ```
 
-Required deployment values are in `env.example`. `DEEPLINE_API_KEY` and `CRUSTDATA_API_KEY` are server-only. Never prefix either with `NEXT_PUBLIC_` or commit them. The demo uses Deepline for HubSpot lookups and People Data Labs; direct CrustData is a server-side real-time fallback when the Deepline provider layer has no company result. Brandfetch uses a client ID to make a browser-side logo request after the route response, so logo loading adds no qualification latency.
+Set `DEEPLINE_API_KEY` in `.env.local`. Do not prefix it with `NEXT_PUBLIC_` or commit the file.
 
-The production app is protected with HTTP Basic Auth. Set `INBOUND_DEMO_ACCESS_PASSWORD` only in the production environment and use `deepline` as the username. A production deployment without this value fails closed.
+Everything else in `env.example` is optional:
 
-When `INBOUND_DEMO_ASYNC_PLAY_NAME` is set, the API starts the included Play with `after()` after returning the calendar. Its launch is capped and never holds the response open.
+- HubSpot owner IDs map workspace CRM owners to the three calendars. Optional
+  contact-property mappings enable fill-only revenue and calendar writes.
+- Vercel KV stores background enrichment results for browser polling.
+- Brandfetch adds a logo after routing.
+- HTTP Basic Auth protects a shared production demo.
+- Deepline Play names enable optional post-response workflows.
 
-## Test the production app
+Without KV, the synchronous route still works, but a browser cannot retrieve enrichment that finishes after the response. A production deployment without `INBOUND_DEMO_ACCESS_PASSWORD` fails closed.
 
-Use the deployed form with a work email and confirm the following:
-
-1. The result includes a Deepline owner and booking path, even if enrichment is still pending.
-2. A known HubSpot owner remains with that owner.
-3. The `Contact verification` panel distinguishes an exact person match from company-only verification.
-4. The page updates automatically after background enrichment completes.
-5. `Show live routing evidence` lists the provider outcomes and applied routing rule.
-
-For a request-level smoke test, use a test-owned work email—not a customer email—against the production endpoint:
+## Try the API
 
 ```sh
-curl -sS -X POST https://YOUR_DEPLOYMENT/api/inbound-lead/qualify \
-  -H 'content-type: application/json' \
-  --data '{"firstName":"Test","lastName":"Lead","email":"test@example-business.com"}'
-```
-
-This makes live enrichment requests and may consume provider credits. Never send credentials in browser-visible requests or commit `.env.local`.
-
-## Examples
-
-```sh
-curl -X POST http://localhost:3000/api/inbound-lead/qualify \
+curl -sS -X POST http://localhost:3000/api/inbound-lead/qualify \
   -H 'content-type: application/json' \
   --data @examples/valid-work-email.json
 ```
 
-`examples/invalid-personal-email.json` verifies the malformed-input, no-enrichment rejection path. The API also rejects personal email domains before calling providers.
+`examples/invalid-personal-email.json` verifies that invalid non-work input is rejected before any provider call. Common personal-email domains are rejected by the same validation path.
 
-## Async workflow
+For a password-protected deployment, use your own deployment URL and test-owned work email:
 
-`plays/inbound-lead-async.play.ts` is the included post-response Deepline Play. Validate and publish it with the Deepline CLI after authenticating to the intended workspace:
+```sh
+curl -sS -u "deepline:$INBOUND_DEMO_ACCESS_PASSWORD" \
+  -X POST https://YOUR_DEPLOYMENT/api/inbound-lead/qualify \
+  -H 'content-type: application/json' \
+  --data '{"firstName":"Test","lastName":"Lead","email":"test@example-business.com"}'
+```
+
+Live requests can consume Deepline workspace credits. Do not place credentials in browser-visible requests.
+
+## Verify the result
+
+Confirm that:
+
+1. A booking route appears even while deeper enrichment is pending.
+2. A known HubSpot owner remains the owner.
+3. The SDK waterfall shows each source as `hit`, `miss`, `skipped`, or `error`.
+4. Contact enrichment appears only after an exact work-email match.
+5. Background data updates the page when KV is configured.
+6. HubSpot fills supported empty fields without overwriting populated fields.
+
+## Optional Plays
+
+`plays/inbound-lead-async.play.ts` is the minimal post-response workflow. It is safe to extend with persistence, Slack, or other actions because it runs after the calendar response.
 
 ```sh
 deepline plays check plays/inbound-lead-async.play.ts
 deepline plays publish plays/inbound-lead-async.play.ts
 ```
 
-No email action is enabled by default.
-
-## Booking-aware HubSpot nurture
-
-`plays/inbound-lead-nurture.play.ts` is a separate post-route Play. It keeps
-calendar management outside this app and supports the following durable flow:
-
-1. On route completion, call the Play with `mode: "queue"` to write the
-   versioned score, state, idempotency key, and follow-up due time to the HubSpot
-   contact, plus the appropriate manual lists.
-2. Have a HubSpot workflow (or a signed webhook scheduler) call it again with
-   `mode: "evaluate"` after the grace period, including a definitive
-   `booking.status` from HubSpot activity.
-3. `booked` skips outreach. `unknown` is sent to review. Only `not_booked`
-   creates the owner task and, when configured, enrolls the contact in a
-   HubSpot sequence.
-
-The Play defaults to a dry run. Set `execute: true` only after creating the
-manual lists and custom contact properties referenced by the input:
-
-- `deepline_nurture_state`
-- `deepline_nurture_key`
-- `deepline_followup_due_at`
-- `deepline_fit_score_v1`
-- `deepline_engagement_score_v1`
-- `deepline_score_version`
-
-Use `eventId` as the stable inbound-lead ID for both calls. That makes replay
-safe and leaves a clear receipt for each list write, property update, sequence
-enrollment, and owner task. Do not call the evaluate branch unless the booking
-signal is definitive.
-
-```sh
-deepline plays check plays/inbound-lead-nurture.play.ts
-deepline plays publish plays/inbound-lead-nurture.play.ts
-```
+No email action is enabled by default. The separate booking-aware HubSpot nurture example is documented in [`docs/advanced-nurture.md`](docs/advanced-nurture.md).
