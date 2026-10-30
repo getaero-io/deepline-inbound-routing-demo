@@ -1,13 +1,40 @@
 import { describe, expect, mock, test } from "bun:test";
 import {
   fillMissingHubSpotFields,
+  ensureHubSpotContact,
   lookupHubSpot,
   type HubSpotResult,
 } from "./hubspot";
 
-const execute = mock(
-  async (_tool: string, _input: Record<string, unknown>) => ({}),
-);
+test("new-lead contact creation reconciles a lost response using exact email", async () => {
+  let searches = 0;
+  const id = await ensureHubSpotContact(
+    { email: "test@example.com", firstName: "Test", company: null },
+    async (tool) => {
+      if (tool === "hubspot_create_object") throw new Error("Response lost");
+      return {
+        data: { results: ++searches === 1 ? [] : [{ id: "reconciled" }] },
+      };
+    },
+  );
+  expect(id).toBe("reconciled");
+});
+
+test("new-lead creation refuses an ambiguous contact-search response", async () => {
+  const calls: string[] = [];
+  await expect(
+    ensureHubSpotContact(
+      { email: "test@example.com", firstName: "Test", company: null },
+      async (tool) => {
+        calls.push(tool);
+        return {};
+      },
+    ),
+  ).rejects.toThrow("Unknown HubSpot search result");
+  expect(calls).toEqual(["hubspot_search_objects"]);
+});
+
+const execute = mock(async (_tool: string, _input: Record<string, unknown>) => ({}));
 const crm = (properties: Record<string, unknown>): HubSpotResult => ({
   ownerId: null,
   existingCustomer: false,
@@ -161,8 +188,7 @@ describe("lookupHubSpot", () => {
 
   test("preserves per-record unavailability instead of reporting a false miss", async () => {
     const runner = mock(async (_tool: string, input: Record<string, unknown>) => {
-      if (input.object_type === "contacts")
-        throw new Error("Contact search timed out");
+      if (input.object_type === "contacts") throw new Error("Contact search timed out");
       return { results: [] };
     });
 
@@ -176,42 +202,34 @@ describe("lookupHubSpot", () => {
 
   test("uses a configured contact revenue value before account revenue", async () => {
     const previous = process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY;
-    process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY =
-      "deepline_revenue";
+    process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY = "deepline_revenue";
     try {
-      const runner = mock(
-        async (_tool: string, input: Record<string, unknown>) =>
-          input.object_type === "contacts"
-            ? {
-                results: [
-                  {
-                    id: "contact-3",
-                    properties: { deepline_revenue: "$10M-$25M" },
-                  },
-                ],
-              }
-            : {
-                results: [
-                  {
-                    id: "company-3",
-                    properties: { annualrevenue: "1000000" },
-                  },
-                ],
-              },
+      const runner = mock(async (_tool: string, input: Record<string, unknown>) =>
+        input.object_type === "contacts"
+          ? {
+              results: [
+                {
+                  id: "contact-3",
+                  properties: { deepline_revenue: "$10M-$25M" },
+                },
+              ],
+            }
+          : {
+              results: [
+                {
+                  id: "company-3",
+                  properties: { annualrevenue: "1000000" },
+                },
+              ],
+            },
       );
 
-      const result = await lookupHubSpot(
-        "revenue@example.com",
-        "example.com",
-        runner,
-      );
+      const result = await lookupHubSpot("revenue@example.com", "example.com", runner);
 
       expect(result.revenue).toBe("$10M-$25M");
     } finally {
-      if (previous === undefined)
-        delete process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY;
-      else
-        process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY = previous;
+      if (previous === undefined) delete process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY;
+      else process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY = previous;
     }
   });
 });

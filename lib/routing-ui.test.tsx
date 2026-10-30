@@ -4,6 +4,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { InboundRouting } from "../app/routing";
 
 describe("inbound routing result UI", () => {
+  test("starts with only email and prefills without capturing or requesting a demo", () => {
+    const markup = renderToStaticMarkup(<InboundRouting initialEmail="test@company.com" />);
+    expect(markup).toContain('value="test@company.com"');
+    expect(markup).toContain("Continue");
+    expect(markup).not.toContain('name="firstName"');
+    expect(markup).toContain("Follow-up starts only after you request a demo.");
+  });
   test("renders canonical enrichment values and Jai's embedded calendar", () => {
     const markup = renderToStaticMarkup(
       <InboundRouting
@@ -104,13 +111,11 @@ describe("inbound routing result UI", () => {
     expect(markup).toContain('class="calendar-cta"');
     expect(markup).toContain('href="https://calendly.com/jptoor/30min"');
     expect(markup).toContain('class="calendar-embed"');
-    expect(markup).toContain('<iframe');
+    expect(markup).toContain("<iframe");
     expect(markup).toContain('src="https://calendly.com/jptoor/30min"');
     expect(markup).toContain('title="Book time with Jai Toor"');
     expect(markup).toContain('referrerPolicy="no-referrer"');
-    expect(markup).toContain(
-      'aria-label="Open Jai Toor calendar in a new tab"',
-    );
+    expect(markup).toContain('aria-label="Open Jai Toor calendar in a new tab"');
     expect(markup.indexOf("Live contact enrichment")).toBeLessThan(
       markup.indexOf("Deepline SDK waterfall"),
     );

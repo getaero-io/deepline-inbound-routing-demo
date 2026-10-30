@@ -1,7 +1,7 @@
 import { definePlay } from "deepline";
 
 type BookingStatus = "booked" | "not_booked" | "unknown";
-type Mode = "queue" | "evaluate";
+type Mode = "queue" | "evaluate" | "automated";
 
 type NurtureInput = {
   /** Stable inbound event ID. Reuse it when retrying the same lead. */
@@ -33,6 +33,14 @@ type NurtureInput = {
   evaluatedAt: string;
   followUp: {
     dueAt: string;
+    bookingProperties?: { status: string; checkedAt: string; eligible: string };
+    draft?: {
+      subject: string;
+      context: string;
+      body: string;
+      htmlBody: string;
+    };
+    calendarUrl?: string;
     /** Optional manual-list IDs. They must exist before execution is enabled. */
     allInboundListId?: string;
     priorityListId?: string;
@@ -73,26 +81,104 @@ const due = (dueAt: string, evaluatedAt: string) => {
   );
 };
 
+// HubSpot date-time properties may be returned as epoch-millisecond strings.
+const bookingTimestamp = (value: string | null) =>
+  value && /^\d{13}$/.test(value) ? Number(value) : Date.parse(value ?? "");
+
 export default definePlay(
   "inbound-lead-nurture",
   async (ctx, input: NurtureInput) => {
+    if (!["queue", "evaluate", "automated"].includes(input.mode))
+      throw new Error("Invalid nurture mode.");
+    if (
+      !Number.isFinite(Date.parse(input.followUp.dueAt)) ||
+      !Number.isFinite(Date.parse(input.evaluatedAt))
+    )
+      throw new Error("Valid nurture timestamps are required.");
+    let booking = input.booking;
+    let evaluatedAt = input.evaluatedAt;
+    let eligible = input.mode !== "automated";
+    if (input.mode === "automated" && input.execute === true && input.contact.id) {
+      const delay = Date.parse(input.followUp.dueAt) - Date.parse(input.evaluatedAt);
+      if (delay < 0 || delay > 7 * 86400000) throw new Error("Invalid follow-up delay.");
+      const names = input.followUp.propertyNames;
+      const fields = input.followUp.bookingProperties;
+      if (!names) throw new Error("Queue properties are required for automated nurture.");
+      if (!fields) throw new Error("Authoritative booking properties are required.");
+      await ctx.tools.execute({
+        id: "queue_booking_check",
+        tool: "hubspot_update_object",
+        input: {
+          object_type: "contacts",
+          object_id: input.contact.id,
+          properties: {
+            [names.state]: "queued",
+            [names.key]: `${input.contact.id}:inbound-nurture:${input.eventId}`,
+            [names.dueAt]: input.followUp.dueAt,
+          },
+        },
+        description:
+          "Persist follow-up intent before the durable wait, for the authoritative booking workflow.",
+      });
+      // Allow the due-time CRM booking workflow one minute to settle its read.
+      await ctx.sleep(delay + 60000);
+      evaluatedAt = await ctx.step("evaluation_clock", () => new Date().toISOString());
+      const result = await ctx.tools.execute({
+        id: "verify_booking",
+        tool: "hubspot_get_object",
+        staleAfterSeconds: 0,
+        input: {
+          object_type: "contacts",
+          object_id: input.contact.id,
+          properties: ["email", fields.status, fields.checkedAt, fields.eligible],
+        },
+        description:
+          "Read the trusted scheduler's booking and contact eligibility state after the grace period.",
+      });
+      const raw = result.toolResponse.rawV2 as {
+        data?: { properties?: Record<string, unknown> };
+        properties?: Record<string, unknown>;
+      };
+      const properties = raw?.data?.properties ?? raw?.properties;
+      const checkedAt =
+        typeof properties?.[fields.checkedAt] === "string"
+          ? String(properties[fields.checkedAt])
+          : null;
+      const checked = bookingTimestamp(checkedAt);
+      const now = Date.parse(evaluatedAt);
+      const fresh =
+        checked >= Date.parse(input.followUp.dueAt) && checked <= now && now - checked <= 300000;
+      eligible =
+        properties?.email === input.contact.email &&
+        [true, "true"].includes(properties?.[fields.eligible] as boolean | string);
+      booking = {
+        status:
+          properties?.[fields.status] === "booked"
+            ? "booked"
+            : fresh && properties?.[fields.status] === "not_booked"
+              ? "not_booked"
+              : "unknown",
+        checkedAt,
+      };
+    }
     const executionKey = `${input.contact.id ?? input.contact.email}:inbound-nurture:${input.eventId}`;
     const automatic = input.execute === true;
     const hasContact = Boolean(input.contact.id);
     const propertyNames = input.followUp.propertyNames;
     const priority = input.route.fitScore >= 70 || (input.engagement.score ?? 0) >= 50;
 
-    const decision = !hasContact
-      ? "needs_review"
-      : input.mode === "queue"
-        ? "queued"
-        : input.booking.status === "booked"
-          ? "skip_booked"
-          : input.booking.status === "unknown"
-            ? "needs_review"
-            : !due(input.followUp.dueAt, input.evaluatedAt)
-              ? "not_due"
-              : "nurture";
+    const decision =
+      !hasContact || !eligible
+        ? "needs_review"
+        : input.mode === "queue"
+          ? "queued"
+          : booking.status === "booked"
+            ? "skip_booked"
+            : booking.status !== "not_booked"
+              ? "needs_review"
+              : !due(input.followUp.dueAt, evaluatedAt)
+                ? "not_due"
+                : "nurture";
 
     const plan = {
       executionKey,
@@ -134,10 +220,17 @@ export default definePlay(
         decision === "nurture" && input.followUp.sequence
           ? { sequenceId: input.followUp.sequence.id }
           : null,
+      draft: input.followUp.draft ?? null,
     };
 
     ctx.log(`${input.mode} decision for ${input.contact.email}: ${decision}.`);
-    if (!automatic || !hasContact || decision === "needs_review" || decision === "skip_booked" || decision === "not_due") {
+    if (
+      !automatic ||
+      !hasContact ||
+      decision === "needs_review" ||
+      decision === "skip_booked" ||
+      decision === "not_due"
+    ) {
       return { mode: "dry_run", plan, applied: [] };
     }
 
@@ -151,7 +244,22 @@ export default definePlay(
       await ctx.tools.execute({
         id: "set_nurture_state",
         tool: "hubspot_update_object",
-        input: { object_type: "contacts", object_id: contactId, properties: plan.properties },
+        input: {
+          object_type: "contacts",
+          object_id: contactId,
+          properties: {
+            ...plan.properties,
+            ...(input.followUp.draft
+              ? {
+                  deepline_followup_subject: input.followUp.draft.subject,
+                  deepline_followup_context: input.followUp.draft.context,
+                }
+              : {}),
+            ...(input.followUp.calendarUrl
+              ? { deepline_followup_calendar: input.followUp.calendarUrl }
+              : {}),
+          },
+        },
         description: "Persist the versioned inbound-routing state on the contact.",
       });
       applied.push("contact_properties");
@@ -174,10 +282,13 @@ export default definePlay(
     const sequenceStatus = await ctx.tools.execute({
       id: "check_sequence_enrollment",
       tool: "hubspot_get_contact_sequence_enrollments",
+      staleAfterSeconds: 0,
       input: { contact_id: contactId },
       description: "Avoid enrolling a contact that is already in a HubSpot sequence.",
     });
     const enrolled = asEnrollment(sequenceStatus.toolResponse.rawV2).is_enrolled === true;
+    if (typeof asEnrollment(sequenceStatus.toolResponse.rawV2).is_enrolled !== "boolean")
+      throw new Error("Unknown sequence enrollment status; outreach withheld.");
 
     if (!enrolled && input.followUp.sequence) {
       await ctx.tools.execute({
@@ -202,7 +313,7 @@ export default definePlay(
       title: plan.task.title,
       priority: taskPriority,
       due_date: plan.task.dueDate,
-      notes: `Deepline inbound nurture key: ${executionKey}. Booking check: not booked.`,
+      notes: `Deepline inbound nurture key: ${executionKey}. Booking check: not booked.\n${input.followUp.draft?.body ?? ""}`,
       ...(input.contact.ownerId ? { assigned_to: input.contact.ownerId } : {}),
     };
     await ctx.tools.execute({
@@ -217,6 +328,6 @@ export default definePlay(
   },
   {
     description:
-      "Queue and evaluate a booking-aware, idempotent HubSpot nurture branch after inbound routing.",
+      "Queue, wait and evaluate a booking-aware HubSpot nurture branch after inbound routing.",
   },
 );

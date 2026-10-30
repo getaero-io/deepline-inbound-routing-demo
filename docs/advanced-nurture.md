@@ -1,93 +1,69 @@
-# Advanced booking-aware HubSpot nurture
+# Booking-aware follow-up after a demo request
 
-The core demo stops after enrichment, routing, and the optional fill-only HubSpot update. `plays/inbound-lead-nurture.play.ts` is a separate example for teams that want to schedule follow-up without delaying the form.
+The form now launches `plays/inbound-lead-nurture.play.ts` after routing and enrichment when `INBOUND_DEMO_NURTURE_PLAY_NAME` is set. `automated` mode persists a due time in HubSpot, waits durably in Deepline, then reads a trusted booking check before creating an owner task or enrolling an existing HubSpot sequence. The calendar response never waits for the grace period.
 
-Calendar management remains outside this application. The Play consumes a definitive booking signal from HubSpot or another trusted scheduler.
+Email-only captures are separate from submitted demo requests and do not trigger outreach. Browser calendar-open, iframe-load, page-close and missing Calendly events are not booking evidence.
 
 ## Flow
 
-1. Call the Play with `mode: "queue"` after routing. It prepares the versioned score, state, idempotency key, follow-up time, and manual-list memberships.
-2. After the grace period, have a HubSpot workflow or signed scheduler call the same Play with `mode: "evaluate"` and the current booking status.
-3. A `booked` result skips outreach.
-4. An `unknown` result goes to review.
-5. A definitive `not_booked` result creates an owner task and can enroll the contact in a configured HubSpot sequence.
+1. Visitor clicks Continue with work email. KV retains `email_captured` for 24 hours when configured.
+2. Visitor submits name and email. The record becomes `submitted`; existing enrichment and routing run.
+3. Post-response enrichment supplies verified company/title, score, routed owner and calendar to the nurture Play. With execution enabled, a missing HubSpot contact is created by exact email after a second lookup. An ambiguous create is reconciled by email rather than blindly retried.
+4. The Play writes `queued`, event key and due time, then sleeps until the grace period plus a one-minute booking-sync allowance.
+5. A trusted HubSpot workflow checks the scheduler at the due time and writes booking status, check timestamp and eligibility. Configure this integration before enabling execution.
+6. The Play rereads those properties through Deepline. `booked` suppresses outreach. `not_booked` must be checked at or after due time, within the last five minutes, and not in the future. Missing or malformed data, another email, or ineligible contacts go to review.
+7. A confirmed unbooked, eligible lead gets a personalized task draft. If a reviewed sequence is configured, its subject/context/calendar fields are written before enrollment. An active enrollment is not repeated; unknown enrollment status fails closed.
 
-## Safety defaults
+## Configuration and activation
 
-The Play defaults to a dry run. Set `execute: true` only after reviewing its returned plan and creating the referenced HubSpot properties and manual lists.
+- Engineering: publish the supplied Play to the intended workspace before configuring `INBOUND_DEMO_NURTURE_PLAY_NAME`.
+- RevOps: create the properties and booking workflow below before enabling execution.
+- Calendar owner: ensure every routed calendar is covered by the authoritative lookup before activation.
+- RevOps: review sender, sequence, suppression and automatic unenrollment on replies/bookings before activation.
+- Engineering: keep `INBOUND_DEMO_NURTURE_EXECUTE=false` for the first form-to-Play dry run; inspect the draft and identity, then enable only after booked and unbooked fixtures pass.
 
-Use the same `eventId` for the queue and evaluate calls. It becomes part of the stable execution key, making a retried inbound event observable and replay-safe.
-
-The Play requires both a HubSpot contact ID and a definitive booking result before it can create outreach. It checks existing sequence enrollment before adding another sequence.
-
-## HubSpot properties
-
-Create the following contact properties before enabling execution:
-
-- `deepline_nurture_state`
-- `deepline_nurture_key`
-- `deepline_followup_due_at`
-- `deepline_fit_score_v1`
-- `deepline_engagement_score_v1`
-- `deepline_score_version`
-
-Pass their names through `followUp.propertyNames`. Manual-list IDs and sequence configuration are optional inputs; they are not stored in the repository.
-
-## Queue input
-
-The first call records future evaluation state:
-
-```json
-{
-  "eventId": "stable-inbound-event-id",
-  "mode": "queue",
-  "execute": false,
-  "contact": {
-    "id": "hubspot-contact-id",
-    "email": "test@example-business.com",
-    "ownerId": "hubspot-owner-id"
-  },
-  "route": {
-    "ownerName": "Jai Toor",
-    "fitScore": 82,
-    "scoreVersion": "fit-v1"
-  },
-  "engagement": {
-    "score": 40,
-    "lastEngagedAt": null,
-    "source": "hubspot"
-  },
-  "booking": {
-    "status": "unknown",
-    "checkedAt": null
-  },
-  "evaluatedAt": "2026-08-26T14:00:00.000Z",
-  "followUp": {
-    "dueAt": "2026-08-27T14:00:00.000Z"
-  }
-}
-```
-
-Pass timestamps from the caller or scheduler. The Play does not derive wall-clock time during a durable run.
-
-## Evaluate input
-
-Reuse the queue payload and update:
-
-- `mode` to `"evaluate"`
-- `evaluatedAt` to the scheduler's current timestamp
-- `booking.status` to `"booked"`, `"not_booked"`, or `"unknown"`
-- `booking.checkedAt` to the timestamp of the authoritative check
-
-Keep `execute: false` until the returned plan contains the intended decision, lists, properties, task, and optional sequence.
-
-## Publish
-
-Authenticate the Deepline CLI to the intended workspace, then run:
+Set `INBOUND_DEMO_NURTURE_GRACE_MINUTES` (default 60, maximum seven days). Optional sequence enrollment requires all three of `INBOUND_DEMO_NURTURE_SEQUENCE_ID`, `INBOUND_DEMO_NURTURE_SENDER_EMAIL` and `INBOUND_DEMO_NURTURE_USER_ID`. Without a sequence the Play creates an owner task only. A Play name alone does not send emails or create CRM contacts; execution remains off by default.
 
 ```sh
 deepline plays check plays/inbound-lead-nurture.play.ts
 deepline plays publish plays/inbound-lead-nurture.play.ts
 ```
 
-Call the published Play from the HubSpot workflow or signed scheduler that owns the delayed booking check. The core application does not launch this branch.
+This change does not publish a Play, change deployment settings, provision HubSpot properties or enable a live sequence.
+
+## HubSpot properties and booking workflow
+
+Create these contact properties:
+
+| Property                       | Type / purpose                                                                                    |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `deepline_nurture_state`       | text: queued or nurture                                                                           |
+| `deepline_nurture_key`         | text: event correlation, not an exactly-once lock                                                 |
+| `deepline_followup_due_at`     | date-time: authoritative booking check due time                                                   |
+| `deepline_fit_score_v1`        | number                                                                                            |
+| `deepline_engagement_score_v1` | number                                                                                            |
+| `deepline_score_version`       | text                                                                                              |
+| `deepline_booking_status`      | text: booked, not_booked, unknown                                                                 |
+| `deepline_booking_checked_at`  | date-time: actual scheduler lookup time                                                           |
+| `deepline_followup_eligible`   | boolean: explicit eligibility, including reply, opt-out, bounce and existing-customer suppression |
+| `deepline_followup_subject`    | text: personalized subject                                                                        |
+| `deepline_followup_context`    | text: factual company/title context                                                               |
+| `deepline_followup_calendar`   | text: routed booking URL                                                                          |
+
+Trigger/re-enroll the trusted workflow on a new `deepline_nurture_key`, delay until `deepline_followup_due_at`, then query the booking source across relevant calendars for the exact email. Write `not_booked` only after a complete successful lookup with no matching active booking. On provider errors, incomplete calendar coverage or ambiguous identity write `unknown` and set eligibility false. Do not initialize every lead to `not_booked` at form submission. Booking webhooks should update status immediately, and the due-time workflow should refresh it. Timestamp the completed lookup, not the form submit.
+
+The sequence should use subject and context personalization tokens and a descriptive hyperlink whose destination is the calendar property. Use the Play's `draft.htmlBody` for reviewed HTML preview; its plain `body` fallback contains no raw URLs. Configure the signature for the actual sender and honor suppression. HubSpot's [sequence API requirements](https://developers.hubspot.com/docs/api-reference/latest/automation/sequences/guide) include user-level app access and an eligible sales/service seat; a connected CRM alone does not prove enrollment permission.
+
+## Delivery and verification limits
+
+Deepline persists waits and tool receipts within a run. The existing form's `after()` callback launches the Play; it is not a transactional outbox. A process failure before launch can lose a launch, and repeated separate submissions can start separate runs. Check failed launches in deployment logs and reconcile before replaying. The event key is for correlation; it does not make HubSpot task creation exactly once across runs. Enrollment checks reduce repeats but are not an atomic cross-run lock.
+
+The Play stops when booking evidence is stale or unavailable. No 20% conversion claim is made: the quoted experiment is anecdotal and not a measured outcome here. Measure submitted requests, confirmed bookings, eligible unbooked leads, enrollments and later attributed bookings separately.
+
+## Existing manual callers
+
+`queue` and `evaluate` modes remain available. Queue prepares due-time state. A trusted caller supplies current booking status and `evaluatedAt` for evaluation. Prefer automated mode from the form so the check is performed after the durable wait. Reuse an event ID for correlation, not global deduplication.
+
+## Docebo comparison
+
+The public [Docebo demo page](https://www.docebo.com/demo/) markets a demo request. The supplied HTML analysis describes a HubSpot submit and soft thank-you path, but those private automation details and the tweet's conversion rate were not independently established here. This implementation preserves direct calendar booking and treats a submitted request and a confirmed booking as separate events.
