@@ -10,7 +10,7 @@
     "check:plays": "deepline plays check plays/inbound-lead-async.play.ts && deepline plays check plays/inbound-lead-nurture.play.ts"
   },
   "dependencies": {
-    "deepline": "^0.3.37",
+    "deepline": "0.3.409",
     "next": "16.3.0-canary.60",
     "react": "19.2.3",
     "react-dom": "19.2.3"

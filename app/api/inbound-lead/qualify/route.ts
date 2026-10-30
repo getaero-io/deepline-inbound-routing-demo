@@ -12,6 +12,8 @@ import {
   type AuthFingerprint,
 } from "../../../../lib/auth-fingerprint";
 import { startPlay } from "../../../../lib/deepline";
+import { markSubmitted } from "../../../../lib/capture";
+import { launchNurture } from "../../../../lib/nurture";
 import { enrichCompany, enrichPerson } from "../../../../lib/enrichment";
 import {
   fillMissingHubSpotFields,
@@ -68,12 +70,7 @@ const NO_AUTH: AuthFingerprint = {
 };
 
 type RouteDecision = ReturnType<typeof routeLead> & { isFallback: boolean };
-type HubSpotSync =
-  | "pending"
-  | "updated"
-  | "not_needed"
-  | "not_applicable"
-  | "failed";
+type HubSpotSync = "pending" | "updated" | "not_needed" | "not_applicable" | "failed";
 
 class RouteDeadlineError extends Error {
   constructor() {
@@ -94,9 +91,7 @@ function brandLogo(domain: string) {
 }
 
 function hasBackgroundStore() {
-  return Boolean(
-    process.env.KV_REST_API_URL?.trim() && process.env.KV_REST_API_TOKEN?.trim(),
-  );
+  return Boolean(process.env.KV_REST_API_URL?.trim() && process.env.KV_REST_API_TOKEN?.trim());
 }
 
 async function withinDeadline<T>(promise: Promise<T>, ms: number) {
@@ -136,10 +131,7 @@ function pendingWaterfall(entity: "company" | "person") {
       {
         order: 1,
         provider: "CrustData",
-        tool:
-          entity === "company"
-            ? "crustdata_v3_company_enrich"
-            : "crustdata_v2_enrich_person",
+        tool: entity === "company" ? "crustdata_v3_company_enrich" : "crustdata_v2_enrich_person",
         status: "pending",
         durationMs: 0,
         detail: "The primary Deepline SDK step is still running.",
@@ -148,9 +140,7 @@ function pendingWaterfall(entity: "company" | "person") {
         order: 2,
         provider: "People Data Labs",
         tool:
-          entity === "company"
-            ? "peopledatalabs_enrich_company"
-            : "peopledatalabs_enrich_contact",
+          entity === "company" ? "peopledatalabs_enrich_company" : "peopledatalabs_enrich_contact",
         status: "pending",
         durationMs: 0,
         detail: "Runs only if the CrustData step does not return a usable match.",
@@ -159,33 +149,22 @@ function pendingWaterfall(entity: "company" | "person") {
   } as const;
 }
 
-function waterfallSummary(
-  trace: WaterfallTrace | ReturnType<typeof pendingWaterfall>,
-) {
+function waterfallSummary(trace: WaterfallTrace | ReturnType<typeof pendingWaterfall>) {
   const hit = trace.attempts.find((attempt) => attempt.status === "hit");
   if (hit) return `${hit.provider} returned the selected ${trace.entity} profile.`;
   const partial = trace.attempts.find((attempt) => attempt.status === "partial");
-  if (partial)
-    return `${partial.provider} returned a verified partial ${trace.entity} profile.`;
+  if (partial) return `${partial.provider} returned a verified partial ${trace.entity} profile.`;
   if (trace.attempts.some((attempt) => attempt.status === "pending"))
     return `${trace.entity === "company" ? "Company" : "Contact"} enrichment is still running.`;
   return `The ${trace.entity} waterfall completed without a usable match.`;
 }
 
-function crmRecordSummary(
-  label: "Contact" | "Account",
-  matched: boolean,
-  unavailable: boolean,
-) {
+function crmRecordSummary(label: "Contact" | "Account", matched: boolean, unavailable: boolean) {
   if (unavailable) return `${label} lookup was unavailable.`;
   return matched ? `${label} record matched.` : `No ${label.toLowerCase()} record matched.`;
 }
 
-function companyForClient(
-  domain: string,
-  profile: CompanyProfile | null,
-  auth?: AuthFingerprint,
-) {
+function companyForClient(domain: string, profile: CompanyProfile | null, auth?: AuthFingerprint) {
   return {
     name: profile?.name ?? null,
     domain,
@@ -255,8 +234,7 @@ function makePayload(input: {
       calendar: input.route.owner.bookingUrl,
       calendarOwner: input.route.owner.name,
       source:
-        person?.enrichmentSource ??
-        (input.crm.title ? "HubSpot CRM" : "No verified person match"),
+        person?.enrichmentSource ?? (input.crm.title ? "HubSpot CRM" : "No verified person match"),
       identityStatus: person ? ("verified" as const) : ("not_verified" as const),
       hubspotSync: input.hubspotSync,
       hubspotContactMatched: input.crm.contactMatched,
@@ -279,9 +257,9 @@ function makePayload(input: {
             ? "unavailable"
             : input.crm.contactUnavailable || input.crm.companyUnavailable
               ? "partial"
-            : input.crm.matched
-              ? "matched"
-              : "no_match",
+              : input.crm.matched
+                ? "matched"
+                : "no_match",
           detail: input.crm.unavailable
             ? "CRM was unavailable; routing continued."
             : `${crmRecordSummary(
@@ -301,11 +279,7 @@ function makePayload(input: {
         },
         {
           name: "Authentication fingerprint",
-          status: input.auth
-            ? input.auth.provider
-              ? "matched"
-              : "no_match"
-            : "deferred",
+          status: input.auth ? (input.auth.provider ? "matched" : "no_match") : "deferred",
           detail: input.auth?.detail ?? "Optional public signal runs after routing.",
         },
         {
@@ -340,9 +314,7 @@ function makePayload(input: {
           {
             name: "Company size",
             value:
-              company?.employeeRange ??
-              company?.employeeCount.toLocaleString() ??
-              "Not returned",
+              company?.employeeRange ?? company?.employeeCount.toLocaleString() ?? "Not returned",
           },
           {
             name: "Sales team",
@@ -357,9 +329,7 @@ function makePayload(input: {
           },
           {
             name: "Auth provider",
-            value:
-              input.auth?.provider ??
-              (input.auth ? "No provider found" : "Checking…"),
+            value: input.auth?.provider ?? (input.auth ? "No provider found" : "Checking…"),
           },
           { name: "Revenue", value: revenue ?? "Not returned" },
           { name: "Lead source", value: "Inbound form" },
@@ -380,19 +350,12 @@ function launchPostRoutePlay(input: Record<string, unknown>) {
 
 export async function POST(request: Request) {
   const started = Date.now();
-  const body = (await request.json().catch(() => null)) as
-    | Record<string, unknown>
-    | null;
+  const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
   const firstName = text(body?.firstName);
   const lastName = text(body?.lastName);
   const email = text(body?.email)?.toLowerCase();
 
-  if (
-    !firstName ||
-    !lastName ||
-    !email ||
-    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)
-  )
+  if (!firstName || !lastName || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return NextResponse.json(
       { error: "First name, last name, and a valid work email are required." },
       { status: 400 },
@@ -405,6 +368,10 @@ export async function POST(request: Request) {
     );
 
   const leadId = crypto.randomUUID();
+  const submittedAt = new Date().toISOString();
+  const progressWork = markSubmitted(body?.captureId, email).catch((error) =>
+    console.error("[inbound-routing] progress update failed", error),
+  );
   const crmWork = lookupHubSpot(email, domain)
     .then((result) => ({ ...result, unavailable: false }))
     .catch((error) => {
@@ -418,14 +385,11 @@ export async function POST(request: Request) {
   const personWork = enrichPerson({ email, firstName, lastName });
   const authWork = withinDeadline(
     companyWork.then(async ({ company }) => {
-        const technologySignal = authFromTechnologies(company?.technologies ?? []);
-        return technologySignal.provider
-          ? technologySignal
-          : await detectAuthProvider(domain);
-      }),
+      const technologySignal = authFromTechnologies(company?.technologies ?? []);
+      return technologySignal.provider ? technologySignal : await detectAuthProvider(domain);
+    }),
     AUTH_DEADLINE_MS,
-  )
-    .catch(() => NO_AUTH);
+  ).catch(() => NO_AUTH);
 
   let crm = EMPTY_CRM;
   let companyResult: CompanyWaterfallResult | null = null;
@@ -433,10 +397,7 @@ export async function POST(request: Request) {
   let route: RouteDecision;
 
   try {
-    crm = await withinDeadline(
-      crmWork,
-      ROUTE_DEADLINE_MS - (Date.now() - started),
-    );
+    crm = await withinDeadline(crmWork, ROUTE_DEADLINE_MS - (Date.now() - started));
     const owner = configuredOwner(crm.ownerId);
     if (owner || crm.existingCustomer) {
       route = {
@@ -481,35 +442,35 @@ export async function POST(request: Request) {
       error: error instanceof Error ? error.message : "Unknown error",
     });
     const owner = configuredOwner(crm.ownerId);
-    route = owner || crm.existingCustomer
-      ? {
-          ...routeLead({
-            company: null,
-            person: null,
-            crmTitle: crm.title,
-            existingCustomer: crm.existingCustomer,
-            owner,
-          }),
-          isFallback: false,
-        }
-      : fallbackDecision(
-          "No high-confidence route completed within five seconds, so the safe route goes to Anand while enrichment continues.",
-        );
+    route =
+      owner || crm.existingCustomer
+        ? {
+            ...routeLead({
+              company: null,
+              person: null,
+              crmTitle: crm.title,
+              existingCustomer: crm.existingCustomer,
+              owner,
+            }),
+            isFallback: false,
+          }
+        : fallbackDecision(
+            "No high-confidence route completed within five seconds, so the safe route goes to Anand while enrichment continues.",
+          );
   }
 
   const stableRoute = route;
   after(async () => {
-    const [finalCrmOutcome, companyOutcome, personOutcome] =
-      await Promise.allSettled([crmWork, companyWork, personWork]);
-    const finalCrm =
-      finalCrmOutcome.status === "fulfilled" ? finalCrmOutcome.value : crm;
+    const [finalCrmOutcome, companyOutcome, personOutcome] = await Promise.allSettled([
+      crmWork,
+      companyWork,
+      personWork,
+    ]);
+    const finalCrm = finalCrmOutcome.status === "fulfilled" ? finalCrmOutcome.value : crm;
     const finalCompany =
       companyOutcome.status === "fulfilled" ? companyOutcome.value : companyResult;
-    const finalPerson =
-      personOutcome.status === "fulfilled" ? personOutcome.value : personResult;
-    const technologyAuth = authFromTechnologies(
-      finalCompany?.company?.technologies ?? [],
-    );
+    const finalPerson = personOutcome.status === "fulfilled" ? personOutcome.value : personResult;
+    const technologyAuth = authFromTechnologies(finalCompany?.company?.technologies ?? []);
     const refreshedSignals = routeLead({
       company: finalCompany?.company ?? null,
       person: finalPerson?.person ?? null,
@@ -548,6 +509,21 @@ export async function POST(request: Request) {
       revenue: finalCompany?.company?.revenue ?? finalCrm.revenue,
       calendarUrl: stableRoute.owner.bookingUrl,
     });
+    const nurtureWork = launchNurture({
+      eventId: leadId,
+      submittedAt,
+      email,
+      firstName,
+      contactId: finalCrm.contactId,
+      ownerId: finalCrm.ownerId,
+      ownerName: stableRoute.owner.name,
+      calendarUrl: stableRoute.owner.bookingUrl,
+      fitScore: enrichedRoute.fitScore,
+      company: corePayload.company.name,
+      title: finalPerson?.person?.title ?? finalCrm.title,
+    }).catch((error) => {
+      console.error("[inbound-routing] nurture launch failed", error);
+    });
     const playWork = launchPostRoutePlay({
       leadId,
       person: { firstName, lastName, email },
@@ -565,19 +541,12 @@ export async function POST(request: Request) {
         signals: enrichedRoute.signals,
       },
     });
-    const [authOutcome, hubspotOutcome] = await Promise.allSettled([
-      authWork,
-      hubspotWork,
-    ]);
-    const finalAuth =
-      authOutcome.status === "fulfilled" ? authOutcome.value : NO_AUTH;
+    const [authOutcome, hubspotOutcome] = await Promise.allSettled([authWork, hubspotWork]);
+    const finalAuth = authOutcome.status === "fulfilled" ? authOutcome.value : NO_AUTH;
     const hubspotSync: HubSpotSync =
       hubspotOutcome.status === "fulfilled" ? hubspotOutcome.value : "failed";
     if (hubspotOutcome.status === "rejected")
-      console.error(
-        "[inbound-routing] HubSpot fill-only update failed",
-        hubspotOutcome.reason,
-      );
+      console.error("[inbound-routing] HubSpot fill-only update failed", hubspotOutcome.reason);
     const finalPayload = makePayload({
       domain,
       leadId,
@@ -597,6 +566,8 @@ export async function POST(request: Request) {
       playWork.catch((error) =>
         console.error("[inbound-routing] post-route Play launch failed", error),
       ),
+      nurtureWork,
+      progressWork,
     ]);
   });
 

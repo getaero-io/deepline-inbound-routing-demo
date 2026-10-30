@@ -1,6 +1,6 @@
 # Deepline inbound routing demo
 
-A forkable Next.js reference app for real-time inbound routing with the Deepline SDK. A visitor enters a name and work email, receives a booking route immediately, and sees company, contact, CRM, and optional technical signals update as they arrive.
+A forkable Next.js reference app for real-time inbound routing with the Deepline SDK. A visitor starts with work email, requests a demo, receives a calendar, and sees company, contact, CRM, and optional technical signals update as they arrive. Optional booking-aware follow-up runs as a durable Deepline Play.
 
 ## The SDK pattern
 
@@ -31,13 +31,14 @@ The route, UI, timeout behavior, and CRM logic do not need to change. A successf
 
 ## Runtime flow
 
-1. Validate the name and work email.
-2. Check HubSpot ownership through the Deepline SDK.
-3. Run CrustData first for company and contact enrichment.
-4. Run People Data Labs only for an unresolved company or exact-email person miss.
-5. Preserve a mapped CRM owner or apply the routing rules.
-6. Return a calendar before the five-second route deadline.
-7. Continue unfinished enrichment in the background and update the result page.
+1. Prefill `?email=` without storing it. An explicit Continue captures email for 24 hours when KV is configured; no outreach starts at this step.
+2. Collect first and last name and submit the demo request. Mark any captured progress as submitted.
+3. Check HubSpot ownership through the Deepline SDK.
+4. Run CrustData first for company and contact enrichment.
+5. Run People Data Labs only for an unresolved company or exact-email person miss.
+6. Preserve a mapped CRM owner or apply the routing rules.
+7. Return a calendar before the five-second route deadline.
+8. Continue unfinished enrichment in the background and update the result page.
 
 The visible result keeps these concerns separate:
 
@@ -121,4 +122,10 @@ deepline plays check plays/inbound-lead-async.play.ts
 deepline plays publish plays/inbound-lead-async.play.ts
 ```
 
-No email action is enabled by default. The separate booking-aware HubSpot nurture example is documented in [`docs/advanced-nurture.md`](docs/advanced-nurture.md).
+No email action is enabled by default. The form's post-response path launches booking-aware nurture when `INBOUND_DEMO_NURTURE_PLAY_NAME` is configured. See [`docs/advanced-nurture.md`](docs/advanced-nurture.md) for the durable grace period, authoritative booking check, personalized draft, and optional sequence enrollment.
+
+## Partial form capture
+
+Email is captured only when the visitor clicks Continue. Typing, blur, a prefilled link, or leaving the page does not submit a demo request or start outreach. The response returns `captureId`; the final submit sends it back so its stage becomes `submitted`. A protected `GET /api/inbound-lead/capture?captureId=...` exposes retained state to operators and agents. The same HTTP Basic Auth policy as the rest of the demo applies. Records expire after 24 hours and are never added to a nurture queue.
+
+Without KV, Continue validates email and moves to the name step, but reports that progress is not saved. An address the visitor never shared with the server cannot be recovered.

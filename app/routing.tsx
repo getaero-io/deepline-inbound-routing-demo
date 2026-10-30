@@ -15,13 +15,7 @@ function isCalendlyUrl(value: string) {
   }
 }
 
-function CalendarEmbed({
-  bookingUrl,
-  ownerName,
-}: {
-  bookingUrl: string;
-  ownerName: string;
-}) {
+function CalendarEmbed({ bookingUrl, ownerName }: { bookingUrl: string; ownerName: string }) {
   const [loaded, setLoaded] = useState(false);
   const [slow, setSlow] = useState(false);
 
@@ -147,26 +141,36 @@ export type Result = {
     };
   };
   elapsedMs: number;
-  enrichment?: { leadId: string; status: "pending" | "completed" | "failed" | "unavailable" };
+  enrichment?: {
+    leadId: string;
+    status: "pending" | "completed" | "failed" | "unavailable";
+  };
 };
 
 export function InboundRouting({
   initialResult = null,
+  initialEmail = "",
 }: {
   initialResult?: Result | null;
+  initialEmail?: string;
 } = {}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [emailAccepted, setEmailAccepted] = useState(false);
+  const [captureId, setCaptureId] = useState<string | null>(null);
+  const [progressSaved, setProgressSaved] = useState(false);
   const [result, setResult] = useState<Result | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const hasEmbeddedCalendar = Boolean(
     result &&
-      EMBEDDED_CALENDAR_OWNERS.has(result.route.owner.name) &&
-      isCalendlyUrl(result.route.owner.bookingUrl),
+    EMBEDDED_CALENDAR_OWNERS.has(result.route.owner.name) &&
+    isCalendlyUrl(result.route.owner.bookingUrl),
   );
   useEffect(() => {
     const leadId = result?.enrichment?.leadId;
     if (!leadId || result.enrichment?.status === "completed") return;
-    if (result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable") return;
+    if (result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable")
+      return;
     let cancelled = false;
     let attempts = 0;
     let timer: number | undefined;
@@ -255,21 +259,30 @@ export function InboundRouting({
     setError(null);
     const body = Object.fromEntries(new FormData(event.currentTarget));
     try {
+      if (!emailAccepted) {
+        const response = await fetch("/api/inbound-lead/capture", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const captured = await response.json();
+        if (!response.ok) throw new Error(captured.error || "Could not save your progress.");
+        setCaptureId(captured.captureId);
+        setProgressSaved(captured.persisted === true);
+        setEmailAccepted(true);
+        return;
+      }
       const response = await fetch("/api/inbound-lead/qualify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, captureId }),
       });
       const payload = (await response.json()) as Result & { error?: string };
       if (!response.ok || !payload.route)
         throw new Error(payload.error || "Could not qualify this lead.");
       setResult(payload);
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Could not qualify this lead.",
-      );
+      setError(caught instanceof Error ? caught.message : "Could not qualify this lead.");
     } finally {
       setBusy(false);
     }
@@ -297,9 +310,7 @@ export function InboundRouting({
           </div>
         </div>
         <div className="score">
-          <span>
-            {result.route.isFallback ? "Verification status" : "Live fit score"}
-          </span>
+          <span>{result.route.isFallback ? "Verification status" : "Live fit score"}</span>
           <strong>
             {result.route.isFallback
               ? "You’re connected — details can follow"
@@ -308,10 +319,7 @@ export function InboundRouting({
           <i>
             <b style={{ width: `${result.qualification.fitScore}%` }} />
           </i>
-          <p>
-            {result.qualification.signals.join(" · ") ||
-              "Limited public signals"}
-          </p>
+          <p>{result.qualification.signals.join(" · ") || "Limited public signals"}</p>
         </div>
         {result.enrichment?.status === "pending" && (
           <div className="routing-status" aria-live="polite">
@@ -319,20 +327,20 @@ export function InboundRouting({
             <span>We’ll add the company profile here automatically.</span>
           </div>
         )}
-        {(result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable") && (
+        {(result.enrichment?.status === "failed" ||
+          result.enrichment?.status === "unavailable") && (
           <div className="routing-status" aria-live="polite">
             <b>Your booking route is ready.</b>
             <span>
-              Company verification did not finish. Your route was kept available instead of blocking you.
+              Company verification did not finish. Your route was kept available instead of blocking
+              you.
             </span>
           </div>
         )}
         <section className="owner" aria-label="Your routed Deepline expert">
           <div>
             <small>
-              {result.route.isFallback
-                ? "Your verified handoff"
-                : "Your Deepline expert"}
+              {result.route.isFallback ? "Your verified handoff" : "Your Deepline expert"}
             </small>
             <h2>{result.route.owner.name}</h2>
             <p className="owner-copy">
@@ -362,12 +370,24 @@ export function InboundRouting({
           <details className="evidence person-enrichment" open>
             <summary>Live contact enrichment</summary>
             <div className="evidence-grid">
-              <span>Title <b>{result.person.title || "Not returned"}</b></span>
-              <span>Seniority <b>{result.person.seniority || "Not returned"}</b></span>
-              <span>Role <b>{result.person.role || "Not returned"}</b></span>
-              <span>Location <b>{result.person.location || "Not returned"}</b></span>
-              <span>Source <b>{result.person.enrichmentSource}</b></span>
-              <span>Identity <b>Work email verified</b></span>
+              <span>
+                Title <b>{result.person.title || "Not returned"}</b>
+              </span>
+              <span>
+                Seniority <b>{result.person.seniority || "Not returned"}</b>
+              </span>
+              <span>
+                Role <b>{result.person.role || "Not returned"}</b>
+              </span>
+              <span>
+                Location <b>{result.person.location || "Not returned"}</b>
+              </span>
+              <span>
+                Source <b>{result.person.enrichmentSource}</b>
+              </span>
+              <span>
+                Identity <b>Work email verified</b>
+              </span>
             </div>
             {result.person.linkedinUrl && (
               <a href={result.person.linkedinUrl} target="_blank" rel="noreferrer">
@@ -379,32 +399,85 @@ export function InboundRouting({
         <details className="evidence company-enrichment" open>
           <summary>Live company enrichment</summary>
           <div className="evidence-grid">
-            <span>People <b>{result.company.employeeRange ?? result.company.employeeCount?.toLocaleString() ?? "Not returned"}</b></span>
-            <span>Sales team <b>{result.company.salesTeamSize?.toLocaleString() ?? "Not returned"}</b></span>
-            <span>Revenue <b>{result.company.revenue ?? "Not returned"}</b></span>
-            <span>Industry <b>{result.company.industry || "Not returned"}</b></span>
-            <span>Geo <b>{result.company.location || "Not returned"}</b></span>
-            <span>Technology <b>{result.company.technologies.join(", ") || "Not returned"}</b></span>
-            <span>Source <b>{result.company.enrichmentSource}</b></span>
+            <span>
+              People{" "}
+              <b>
+                {result.company.employeeRange ??
+                  result.company.employeeCount?.toLocaleString() ??
+                  "Not returned"}
+              </b>
+            </span>
+            <span>
+              Sales team <b>{result.company.salesTeamSize?.toLocaleString() ?? "Not returned"}</b>
+            </span>
+            <span>
+              Revenue <b>{result.company.revenue ?? "Not returned"}</b>
+            </span>
+            <span>
+              Industry <b>{result.company.industry || "Not returned"}</b>
+            </span>
+            <span>
+              Geo <b>{result.company.location || "Not returned"}</b>
+            </span>
+            <span>
+              Technology <b>{result.company.technologies.join(", ") || "Not returned"}</b>
+            </span>
+            <span>
+              Source <b>{result.company.enrichmentSource}</b>
+            </span>
           </div>
         </details>
         {result.contact && (
           <details className="evidence" open>
             <summary>HubSpot record</summary>
             <div className="evidence-grid">
-              <span>CRM contact <b>{result.contact.hubspotContactMatched ? "Matched" : result.contact.hubspotContactUnavailable ? "Lookup unavailable" : "No matching contact"}</b></span>
-              <span>CRM account <b>{result.contact.hubspotCompanyMatched ? "Matched" : result.contact.hubspotCompanyUnavailable ? "Lookup unavailable" : "No matching account"}</b></span>
-              <span>Fill-only sync <b>{result.contact.hubspotSync === "updated" ? "Updated missing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "In progress" : "Not applicable"}</b></span>
+              <span>
+                CRM contact{" "}
+                <b>
+                  {result.contact.hubspotContactMatched
+                    ? "Matched"
+                    : result.contact.hubspotContactUnavailable
+                      ? "Lookup unavailable"
+                      : "No matching contact"}
+                </b>
+              </span>
+              <span>
+                CRM account{" "}
+                <b>
+                  {result.contact.hubspotCompanyMatched
+                    ? "Matched"
+                    : result.contact.hubspotCompanyUnavailable
+                      ? "Lookup unavailable"
+                      : "No matching account"}
+                </b>
+              </span>
+              <span>
+                Fill-only sync{" "}
+                <b>
+                  {result.contact.hubspotSync === "updated"
+                    ? "Updated missing fields"
+                    : result.contact.hubspotSync === "not_needed"
+                      ? "Already complete"
+                      : result.contact.hubspotSync === "failed"
+                        ? "Needs retry"
+                        : result.contact.hubspotSync === "pending"
+                          ? "In progress"
+                          : "Not applicable"}
+                </b>
+              </span>
             </div>
-            <p className="contact-note">CRM fields stay separate from live enrichment. When a contact exists, only empty supported fields are filled; populated fields are never overwritten.</p>
+            <p className="contact-note">
+              CRM fields stay separate from live enrichment. When a contact exists, only empty
+              supported fields are filled; populated fields are never overwritten.
+            </p>
           </details>
         )}
         {result.trace.waterfalls && (
           <details className="evidence sdk-waterfall">
             <summary>Deepline SDK waterfall</summary>
             <p>
-              Company and contact checks run together. Inside each lane,
-              People Data Labs runs only when CrustData does not return a usable match.
+              Company and contact checks run together. Inside each lane, People Data Labs runs only
+              when CrustData does not return a usable match.
             </p>
             {result.trace.waterfalls.map((waterfall) => (
               <div className="waterfall-lane" key={waterfall.entity}>
@@ -426,8 +499,8 @@ export function InboundRouting({
               </div>
             ))}
             <p className="sdk-note">
-              Every provider call above uses <code>deepline.tools.execute()</code>.
-              Provider credentials stay in the Deepline workspace.
+              Every provider call above uses <code>deepline.tools.execute()</code>. Provider
+              credentials stay in the Deepline workspace.
             </p>
           </details>
         )}
@@ -437,8 +510,12 @@ export function InboundRouting({
             <h3>{result.company.auth.provider ?? "No public fingerprint found"}</h3>
             <p>{result.company.auth.detail}</p>
             <div className="evidence-grid">
-              <span>Confidence <b>{result.company.auth.confidence}</b></span>
-              <span>Source <b>{result.company.auth.source.replaceAll("_", " ")}</b></span>
+              <span>
+                Confidence <b>{result.company.auth.confidence}</b>
+              </span>
+              <span>
+                Source <b>{result.company.auth.source.replaceAll("_", " ")}</b>
+              </span>
             </div>
           </details>
         )}
@@ -472,26 +549,17 @@ export function InboundRouting({
             <span>
               Sales team{" "}
               <b>
-                {result.trace.routing.company.salesTeamSize?.toLocaleString() ||
-                  "Not returned"}
+                {result.trace.routing.company.salesTeamSize?.toLocaleString() || "Not returned"}
               </b>
             </span>
             <span>
-              Geo{" "}
-              <b>{result.trace.routing.company.location || "Not returned"}</b>
+              Geo <b>{result.trace.routing.company.location || "Not returned"}</b>
             </span>
             <span>
-              Industry{" "}
-              <b>{result.trace.routing.company.industry || "Not returned"}</b>
+              Industry <b>{result.trace.routing.company.industry || "Not returned"}</b>
             </span>
             <span>
-              Auth{" "}
-              <b>
-                {authProviderLabel(
-                  result.company.auth,
-                  result.enrichment?.status,
-                )}
-              </b>
+              Auth <b>{authProviderLabel(result.company.auth, result.enrichment?.status)}</b>
             </span>
           </div>
           {result.trace.routing.attributes && (
@@ -509,11 +577,10 @@ export function InboundRouting({
         </details>
         {result.company.fullProfile && (
           <details className="evidence full-enrichment">
-          <summary>Full company payload (advanced)</summary>
+            <summary>Full company payload (advanced)</summary>
             <p>
-              Complete selected provider payload. The fields above are
-              reconciled from this source; no provider key or internal
-              credential is included.
+              Complete selected provider payload. The fields above are reconciled from this source;
+              no provider key or internal credential is included.
             </p>
             <pre>{JSON.stringify(result.company.fullProfile, null, 2)}</pre>
           </details>
@@ -522,9 +589,8 @@ export function InboundRouting({
           <details className="evidence full-enrichment">
             <summary>Professional contact payload</summary>
             <p>
-              Only professional fields from an exact work-email match are
-              requested and shown. Personal emails and phone numbers never
-              reach the browser.
+              Only professional fields from an exact work-email match are requested and shown.
+              Personal emails and phone numbers never reach the browser.
             </p>
             <pre>{JSON.stringify(result.person.fullProfile, null, 2)}</pre>
           </details>
@@ -537,40 +603,81 @@ export function InboundRouting({
             <li>Sales teams over 20 or companies with 250+ people go to Jai.</li>
             <li>Deployment roles go to Anand; GTM systems roles go to Jai.</li>
             <li>Other verified companies go to Chirag.</li>
-            <li>If no confident route is available within five seconds, Anand is the safe default while enrichment continues.</li>
+            <li>
+              If no confident route is available within five seconds, Anand is the safe default
+              while enrichment continues.
+            </li>
           </ol>
         </details>
-        <button onClick={() => setResult(null)}>Start over</button>
+        <button
+          onClick={() => {
+            setResult(null);
+            setEmailAccepted(false);
+            setCaptureId(null);
+          }}
+        >
+          Start over
+        </button>
       </section>
     );
   return (
     <form className="card" onSubmit={submit}>
       <small>REALTIME ROUTING</small>
       <h2>Find your Deepline person.</h2>
-      <p>Share your name and work email. We’ll handle the rest.</p>
-      <label>
-        First name
-        <input name="firstName" required placeholder="Avery" />
-      </label>
-      <label>
-        Last name
-        <input name="lastName" required placeholder="Morgan" />
-      </label>
+      <p>Start with your work email. Then we’ll find the right calendar.</p>
       <label>
         Work email
         <input
           name="email"
           type="email"
           required
+          maxLength={254}
+          autoComplete="email"
           placeholder="avery@company.com"
+          value={email}
+          readOnly={emailAccepted}
+          onChange={(event) => setEmail(event.target.value)}
         />
       </label>
+      {emailAccepted && (
+        <button
+          type="button"
+          onClick={() => {
+            setEmailAccepted(false);
+            setCaptureId(null);
+          }}
+        >
+          Change email
+        </button>
+      )}
+      {emailAccepted && (
+        <>
+          <label>
+            First name
+            <input name="firstName" autoComplete="given-name" required placeholder="Avery" />
+          </label>
+          <label>
+            Last name
+            <input name="lastName" autoComplete="family-name" required placeholder="Morgan" />
+          </label>
+          <p>
+            {progressSaved
+              ? "Email saved for 24 hours. Submit below to request a demo and follow-up."
+              : "Progress isn’t saved on this demo. Submit below to request a demo and follow-up."}
+          </p>
+        </>
+      )}
+      {!emailAccepted && (
+        <p>
+          Continue shares your email. Follow-up starts only after you request a demo.
+        </p>
+      )}
       {error && (
         <div role="alert" className="error">
           {error}
         </div>
       )}
-      {busy && (
+      {busy && emailAccepted && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>
           <span>Checking HubSpot while Deepline runs CrustData → PDL on misses.</span>
@@ -578,7 +685,7 @@ export function InboundRouting({
         </div>
       )}
       <button disabled={busy}>
-        {busy ? "Finding your person…" : "Find my person →"}
+        {busy ? "Working…" : emailAccepted ? "Request a demo →" : "Continue →"}
       </button>
     </form>
   );
