@@ -502,14 +502,14 @@ export async function POST(request: Request) {
       console.error("[inbound-routing] core enrichment persistence failed", error),
     );
 
-    const hubspotWork = fillMissingHubSpotFields(finalCrm, {
+    const hubspotWork = body?.dryRun === true ? Promise.resolve<HubSpotSync>('not_applicable') : fillMissingHubSpotFields(finalCrm, {
       title: finalPerson?.person?.title ?? null,
       linkedinUrl: finalPerson?.person?.linkedinUrl ?? null,
       companyName: finalCompany?.company?.name ?? null,
       revenue: finalCompany?.company?.revenue ?? finalCrm.revenue,
       calendarUrl: stableRoute.owner.bookingUrl,
     });
-    const nurtureWork = launchNurture({
+    const nurtureWork = body?.dryRun === true ? Promise.resolve() : launchNurture({
       eventId: leadId,
       submittedAt,
       email,
@@ -524,7 +524,7 @@ export async function POST(request: Request) {
     }).catch((error) => {
       console.error("[inbound-routing] nurture launch failed", error);
     });
-    const playWork = launchPostRoutePlay({
+    const playWork = body?.dryRun === true ? Promise.resolve() : launchPostRoutePlay({
       leadId,
       person: { firstName, lastName, email },
       company: {

@@ -161,6 +161,15 @@ export function InboundRouting({
   const [result, setResult] = useState<Result | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dryRun, setDryRun] = useState(false);
+  const [demoSession, setDemoSession] = useState<string | null>(null);
+  let bookingUrl = result?.route.owner.bookingUrl ?? '';
+  if (demoSession && isCalendlyUrl(bookingUrl)) {
+    const tracked = new URL(bookingUrl);
+    tracked.searchParams.set('utm_source', 'deepline-demo');
+    tracked.searchParams.set('utm_content', demoSession);
+    bookingUrl = tracked.toString();
+  }
   const hasEmbeddedCalendar = Boolean(
     result &&
     EMBEDDED_CALENDAR_OWNERS.has(result.route.owner.name) &&
@@ -272,10 +281,20 @@ export function InboundRouting({
         setEmailAccepted(true);
         return;
       }
+      const activeSession = dryRun ? (demoSession || `inbound-demo-${crypto.randomUUID()}`) : null;
+      if (activeSession) {
+        setDemoSession(activeSession);
+        const started = await fetch('/api/booking-demo/start', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: activeSession, email, dry_run: true }),
+        });
+        const receipt = await started.json();
+        if (!started.ok) throw new Error(receipt.error || 'Could not start the cloud timer.');
+      }
       const response = await fetch("/api/inbound-lead/qualify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ ...body, captureId }),
+        body: JSON.stringify({ ...body, captureId, dryRun }),
       });
       const payload = (await response.json()) as Result & { error?: string };
       if (!response.ok || !payload.route)
@@ -290,6 +309,11 @@ export function InboundRouting({
   if (result)
     return (
       <section className="card result">
+        {demoSession && <div role="status" style={{padding:16,background:'#f4f3ff',marginBottom:16}}>
+          <b>30-minute cloud check started</b>
+          <p>Leave this calendar unbooked. Deepline will log the result. No follow-up email is sent.</p>
+          <small>Session: {demoSession}</small>
+        </div>}
         <div className="success">
           {result.route.isFallback
             ? "ROUTE RESERVED"
@@ -352,7 +376,7 @@ export function InboundRouting({
           {!hasEmbeddedCalendar && (
             <a
               className="calendar-cta"
-              href={result.route.owner.bookingUrl}
+              href={bookingUrl}
               target="_blank"
               rel="noopener noreferrer"
             >
@@ -361,7 +385,7 @@ export function InboundRouting({
           )}
           {hasEmbeddedCalendar && (
             <CalendarEmbed
-              bookingUrl={result.route.owner.bookingUrl}
+              bookingUrl={bookingUrl}
               ownerName={result.route.owner.name}
             />
           )}
@@ -612,6 +636,7 @@ export function InboundRouting({
         <button
           onClick={() => {
             setResult(null);
+            setDemoSession(null);
             setEmailAccepted(false);
             setCaptureId(null);
           }}
@@ -636,7 +661,7 @@ export function InboundRouting({
           placeholder="avery@company.com"
           value={email}
           readOnly={emailAccepted}
-          onChange={(event) => setEmail(event.target.value)}
+          onChange={(event) => { setEmail(event.target.value); setDemoSession(null); }}
         />
       </label>
       {emailAccepted && (
@@ -677,6 +702,10 @@ export function InboundRouting({
           {error}
         </div>
       )}
+      {emailAccepted && <label style={{display:'flex',alignItems:'start',gap:10}}>
+        <input type="checkbox" checked={dryRun} onChange={event=>{ setDryRun(event.target.checked); if (!event.target.checked) setDemoSession(null); }} style={{width:'auto'}} />
+        <span>Test the 30-minute follow-up check. Internal test email only; no messages or CRM updates.</span>
+      </label>}
       {busy && emailAccepted && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>

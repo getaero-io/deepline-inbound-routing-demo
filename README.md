@@ -129,3 +129,15 @@ No email action is enabled by default. The form's post-response path launches bo
 Email is captured only when the visitor clicks Continue. Typing, blur, a prefilled link, or leaving the page does not submit a demo request or start outreach. The response returns `captureId`; the final submit sends it back so its stage becomes `submitted`. A protected `GET /api/inbound-lead/capture?captureId=...` exposes retained state to operators and agents. The same HTTP Basic Auth policy as the rest of the demo applies. Records expire after 24 hours and are never added to a nurture queue.
 
 Without KV, Continue validates email and moves to the name step, but reports that progress is not saved. An address the visitor never shared with the server cannot be recovered.
+
+## 30-minute booking dry run
+
+After Continue, check **Test the 30-minute follow-up check** and submit an internal `@deepline.com` test address. The app starts a signed Deepline Play, saves a session, waits 30 real minutes in the cloud, then logs `booking_observed` or `no_booking_observed`. Dry-run mode skips HubSpot updates, the nurture launch and the legacy post-route Play. Enrichment still runs and can consume credits. No meeting or email is created.
+
+Publish `plays/booking-abandonment-demo.play.ts` in the intended workspace. Bind the play-scoped `INBOUND_BOOKING_DEMO_WEBHOOK_KEY`; set the server-only `INBOUND_BOOKING_WEBHOOK_URL` and matching `INBOUND_BOOKING_WEBHOOK_KEY` in the app. Set `INBOUND_BOOKING_CALENDLY_SIGNING_KEY` for the Calendly receiver.
+
+The `/api/webhooks/calendly` route verifies timestamped HMAC signatures within a three-minute window; only this exact route bypasses Basic Auth. Stable session and event IDs deduplicate retries. Booking events may arrive before session creation. Cancellations invalidate their invitee URI; reschedules use a new URI. The form preserves the session in Calendly's `utm_content`, including after background enrichment refreshes the route.
+
+Deploying this receiver does not register a Calendly subscription. Connect an authorized subscription for `invitee.created` and `invitee.canceled`, using the configured signing key, then verify session tracking and delivery coverage. The current booked control is synthetic. The live nurture workflow continues to use HubSpot meeting records. A demo `no_booking_observed` result only describes events received; it does not prove that every real booking is synced.
+
+Run `node --experimental-strip-types --test lib/booking-demo.test.mjs`, `bun test lib`, `npm run typecheck` and `npm run build`. For the real-time check, submit once, leave the calendar unbooked, and inspect `storage.booking_demo_sessions_v1` after `due_at`. Confirm `checked_at >= due_at` and `delivery_enabled = false`. Exercise the booked path separately with a clearly labeled signed synthetic event.
