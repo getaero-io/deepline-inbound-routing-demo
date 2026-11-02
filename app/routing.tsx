@@ -59,6 +59,8 @@ export function InboundRouting() {
   const [result, setResult] = useState<Result | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dryRun, setDryRun] = useState(false);
+  const [demoSession, setDemoSession] = useState<string | null>(null);
   const isChiragRoute = result?.route.owner.name === "Chirag Toprani";
   useEffect(() => {
     const leadId = result?.enrichment?.leadId;
@@ -131,15 +133,31 @@ export function InboundRouting() {
     setBusy(true);
     setError(null);
     const body = Object.fromEntries(new FormData(event.currentTarget));
+    const activeSession = dryRun ? demoSession ?? `inbound-demo-${crypto.randomUUID()}` : null;
     try {
+      if (dryRun) {
+        const session = activeSession!;
+        setDemoSession(session);
+        const started = await fetch('/api/booking-demo/start', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:body.email,session_id:session,dry_run:true})});
+        const receipt = await started.json();
+        if (!started.ok) throw new Error(receipt.error ?? 'Could not start the demo timer');
+      }
       const response = await fetch("/api/inbound-lead/qualify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({...body, dryRun}),
       });
       const payload = (await response.json()) as Result & { error?: string };
       if (!response.ok || !payload.route)
         throw new Error(payload.error || "Could not qualify this lead.");
+      if (dryRun) {
+        const url = new URL(payload.route.owner.bookingUrl);
+        url.searchParams.set('utm_source','deepline-demo');
+        // The session is stable across retries; the webhook uses it to correlate a booking.
+        const formSession = activeSession;
+        if (formSession) url.searchParams.set('utm_content',formSession);
+        payload.route.owner.bookingUrl = url.href;
+      }
       setResult(payload);
     } catch (caught) {
       setError(
@@ -154,6 +172,11 @@ export function InboundRouting() {
   if (result)
     return (
       <section className="card result">
+        {dryRun && demoSession && <div className="routing-status" role="status">
+          <b>30-minute cloud check started</b>
+          <span>Leave this calendar unbooked. Deepline will log the result. No follow-up email is sent.</span>
+          <small>Session: {demoSession}</small>
+        </div>}
         <div className="success">
           {result.route.isFallback
             ? "ROUTE RESERVED"
@@ -357,7 +380,7 @@ export function InboundRouting() {
             <li>If no confident route is available within five seconds, Anand is the safe default while enrichment continues.</li>
           </ol>
         </details>
-        <button onClick={() => setResult(null)}>Start over</button>
+        <button onClick={() => { setResult(null); setDemoSession(null); }}>Start over</button>
       </section>
     );
   return (
@@ -377,6 +400,7 @@ export function InboundRouting() {
         Work email
         <input
           name="email"
+          onChange={() => setDemoSession(null)}
           type="email"
           required
           placeholder="avery@company.com"
@@ -387,6 +411,10 @@ export function InboundRouting() {
           {error}
         </div>
       )}
+      <label style={{display:'flex',alignItems:'start',gap:10,fontSize:14}}>
+        <input type="checkbox" checked={dryRun} onChange={e=>setDryRun(e.target.checked)} style={{width:18,marginTop:2}} />
+        <span>Test the 30-minute follow-up check. Internal test email only; no messages or CRM updates.</span>
+      </label>
       {busy && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>

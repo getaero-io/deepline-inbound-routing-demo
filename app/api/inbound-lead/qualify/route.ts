@@ -962,7 +962,7 @@ export async function POST(request: Request) {
       hubspotContact: crmResult.hubspotContact,
       identityStatus: verifiedPerson ? "verified" : "not_verified",
     };
-    const hubspotSync = await updateExistingHubSpotContact(
+    const hubspotSync = body?.dryRun === true ? 'not_applicable' as const : await updateExistingHubSpotContact(
       crmResult.contactId,
       contactEnrichment,
     ).catch((error) => {
@@ -1089,7 +1089,7 @@ export async function POST(request: Request) {
       owner: configuredOwner(crmResult.ownerId),
     });
     const elapsedMs = Date.now() - started;
-    launchAsyncWorkflow({
+    if (body?.dryRun !== true) launchAsyncWorkflow({
       person: { firstName, lastName, email },
       company: companyResult,
       route: {

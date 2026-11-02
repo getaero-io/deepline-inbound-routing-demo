@@ -74,3 +74,35 @@ deepline plays publish plays/inbound-lead-async.play.ts
 ```
 
 No email action is enabled by default.
+
+## Booking-abandonment dry run
+
+Check **Test the 30-minute follow-up check** and use an internal `@deepline.com` address. The form starts a signed cloud Play before qualification. It saves a session, waits 30 real minutes, checks the saved booking events, and logs `booking_observed` or `no_booking_observed`. Test mode skips HubSpot contact updates and the legacy asynchronous workflow. Enrichment still runs and can consume credits.
+
+The checkbox defaults off. Nothing in this test sends email, creates a meeting, or enrolls a contact in nurture. `no_booking_observed` means the demo has not received a booking event; it does not establish complete coverage of real Calendly bookings.
+
+Publish `plays/booking-abandonment-demo.play.ts` in the intended Deepline workspace. Bind its play-scoped `INBOUND_BOOKING_DEMO_WEBHOOK_KEY`, then configure these server-only deployment values:
+
+- `INBOUND_BOOKING_WEBHOOK_URL`: the Play's inbound webhook URL.
+- `INBOUND_BOOKING_WEBHOOK_KEY`: the same signing key bound to the Play.
+- `INBOUND_BOOKING_CALENDLY_SIGNING_KEY`: the signing key for a Calendly webhook subscription.
+
+The app forwards only signed, session-correlated booking/cancellation events to Deepline. Session and event IDs deduplicate retries. Events can arrive before the session row is created. Cancellations invalidate their invitee URI; a reschedule has a new URI.
+
+### Connect real Calendly delivery
+
+The receiver is `/api/webhooks/calendly`. It verifies Calendly's timestamped HMAC signature and rejects timestamps outside a three-minute window. Only this exact route bypasses the demo's Basic Auth; the signature is its authentication.
+
+Register an authorized Calendly webhook subscription for `invitee.created` and `invitee.canceled`, using this receiver URL and the configured signing key. The calendar URL includes the session in `utm_content`. Verify that both event types preserve that tracking value before relying on the decision. No Calendly subscription is provisioned by deploying this repository.
+
+The live nurture workflow continues to use HubSpot meeting records. This receiver is a separate dry-run demonstration until Calendly delivery is connected and its coverage is verified.
+
+### Validate
+
+```sh
+node --experimental-strip-types --test lib/booking-demo.test.mjs
+npx tsc --noEmit
+npm run build
+```
+
+For an end-to-end test, submit once in test mode, leave the calendar unbooked, and inspect `storage.booking_demo_sessions_v1` after `due_at`. Confirm `checked_at >= due_at`, the decision is saved once, and `delivery_enabled` remains false. Test the booked branch separately with a clearly labeled synthetic signed event. Do not create a real booking just to exercise this dry run.
