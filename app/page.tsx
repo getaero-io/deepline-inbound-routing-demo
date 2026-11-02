@@ -1,6 +1,12 @@
 import { InboundRouting } from "./routing";
 
-export default function Page() {
+export default async function Page({
+  searchParams,
+}: {
+  searchParams?: Promise<{ email?: string | string[] }>;
+}) {
+  const query = await searchParams;
+  const initialEmail = typeof query?.email === "string" ? query.email.slice(0, 254) : "";
   return (
     <main className="shell">
       <section className="copy">
@@ -11,16 +17,16 @@ export default function Page() {
           <em>We’ll find the right team.</em>
         </h1>
         <p>
-          Tell us who you are. We’ll verify your company, preserve an existing
-          Deepline relationship, and put the right calendar in front of you.
+          Tell us who you are. We’ll verify your company, preserve an existing Deepline
+          relationship, and put the right calendar in front of you.
         </p>
         <ul>
-          <li>Usually ready in under two seconds</li>
+          <li>Route first; enrichment updates live; safe handoff by five seconds</li>
           <li>Work email only — no company form field</li>
-          <li>Existing account ownership stays intact</li>
+          <li>One Deepline key — swap data sources without rebuilding the app</li>
         </ul>
       </section>
-      <InboundRouting />
+      <InboundRouting initialEmail={initialEmail} />
     </main>
   );
 }

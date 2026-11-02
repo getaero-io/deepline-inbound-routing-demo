@@ -2,12 +2,85 @@
 
 import { FormEvent, useEffect, useState } from "react";
 
-type Result = {
+import { authProviderLabel } from "../lib/presentation";
+
+const EMBEDDED_CALENDAR_OWNERS = new Set(["Jai Toor", "Chirag Toprani"]);
+
+function isCalendlyUrl(value: string) {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "calendly.com";
+  } catch {
+    return false;
+  }
+}
+
+function CalendarEmbed({ bookingUrl, ownerName }: { bookingUrl: string; ownerName: string }) {
+  const [loaded, setLoaded] = useState(false);
+  const [slow, setSlow] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+    setSlow(false);
+  }, [bookingUrl]);
+
+  useEffect(() => {
+    if (loaded) return;
+    const timer = window.setTimeout(() => setSlow(true), 5_000);
+    return () => window.clearTimeout(timer);
+  }, [bookingUrl, loaded]);
+
+  return (
+    <div className="calendar-embed">
+      <a
+        className="calendar-cta"
+        href={bookingUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label={`Open ${ownerName} calendar in a new tab`}
+      >
+        Open calendar in a new tab<span aria-hidden="true"> ↗</span>
+      </a>
+      <div className="calendar-frame">
+        {!loaded && (
+          <div className="calendar-loading" role="status" aria-live="polite">
+            {slow
+              ? "Calendar couldn’t load here — open it in a new tab."
+              : `Loading ${ownerName}’s available times…`}
+          </div>
+        )}
+        <iframe
+          src={bookingUrl}
+          title={`Book time with ${ownerName}`}
+          loading="eager"
+          referrerPolicy="no-referrer"
+          onLoad={() => setLoaded(true)}
+          onError={() => setSlow(true)}
+        />
+      </div>
+    </div>
+  );
+}
+
+export type Result = {
   company: {
     name: string | null;
     domain: string;
     employeeCount: number | null;
+    employeeRange: string | null;
+    salesTeamSize: number | null;
+    revenue: string | null;
+    industry: string | null;
+    location: string | null;
+    technologies: string[];
+    enrichmentSource: string;
     logoUrl: string | null;
+    auth?: {
+      provider: string | null;
+      confidence: "high" | "medium" | "none";
+      source: "technology_profile" | "public_site" | "public_auth_endpoint" | "none";
+      detail: string;
+    };
     fullProfile?: Record<string, unknown>;
   };
   route: {
@@ -34,8 +107,23 @@ type Result = {
     source: string;
     identityStatus: "verified" | "not_verified";
     hubspotSync?: "pending" | "updated" | "not_needed" | "not_applicable" | "failed";
+    hubspotContactMatched: boolean;
+    hubspotCompanyMatched: boolean;
+    hubspotContactUnavailable: boolean;
+    hubspotCompanyUnavailable: boolean;
   };
   trace: {
+    waterfalls?: Array<{
+      entity: "company" | "person";
+      attempts: Array<{
+        order: number;
+        provider: string;
+        tool: string;
+        status: "hit" | "partial" | "miss" | "error" | "skipped" | "pending";
+        durationMs: number;
+        detail: string;
+      }>;
+    }>;
     providers: Array<{ name: string; status: string; detail: string }>;
     routing: {
       appliedRule: string;
@@ -43,6 +131,7 @@ type Result = {
       title: string | null;
       company: {
         employeeCount: number | null;
+        employeeRange: string | null;
         salesTeamSize: number | null;
         industry: string | null;
         location: string | null;
@@ -52,20 +141,45 @@ type Result = {
     };
   };
   elapsedMs: number;
-  enrichment?: { leadId: string; status: "pending" | "completed" | "failed" | "unavailable" };
+  enrichment?: {
+    leadId: string;
+    status: "pending" | "completed" | "failed" | "unavailable";
+  };
 };
 
-export function InboundRouting() {
-  const [result, setResult] = useState<Result | null>(null);
+export function InboundRouting({
+  initialResult = null,
+  initialEmail = "",
+}: {
+  initialResult?: Result | null;
+  initialEmail?: string;
+} = {}) {
+  const [email, setEmail] = useState(initialEmail);
+  const [emailAccepted, setEmailAccepted] = useState(false);
+  const [captureId, setCaptureId] = useState<string | null>(null);
+  const [progressSaved, setProgressSaved] = useState(false);
+  const [result, setResult] = useState<Result | null>(initialResult);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [dryRun, setDryRun] = useState(false);
   const [demoSession, setDemoSession] = useState<string | null>(null);
-  const isChiragRoute = result?.route.owner.name === "Chirag Toprani";
+  let bookingUrl = result?.route.owner.bookingUrl ?? '';
+  if (demoSession && isCalendlyUrl(bookingUrl)) {
+    const tracked = new URL(bookingUrl);
+    tracked.searchParams.set('utm_source', 'deepline-demo');
+    tracked.searchParams.set('utm_content', demoSession);
+    bookingUrl = tracked.toString();
+  }
+  const hasEmbeddedCalendar = Boolean(
+    result &&
+    EMBEDDED_CALENDAR_OWNERS.has(result.route.owner.name) &&
+    isCalendlyUrl(result.route.owner.bookingUrl),
+  );
   useEffect(() => {
     const leadId = result?.enrichment?.leadId;
     if (!leadId || result.enrichment?.status === "completed") return;
-    if (result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable") return;
+    if (result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable")
+      return;
     let cancelled = false;
     let attempts = 0;
     let timer: number | undefined;
@@ -74,13 +188,15 @@ export function InboundRouting() {
       try {
         const response = await fetch(`/api/inbound-lead/enrichment/${leadId}`, {
           cache: "no-store",
+          signal: AbortSignal.timeout(2_500),
         });
         const update = (await response.json().catch(() => ({}))) as Partial<Result> & {
           status?: "pending" | "completed" | "failed" | "unavailable";
           error?: string;
         };
         if (cancelled) return;
-        if (update.status === "completed") {
+        const pollStatus = update.enrichment?.status ?? update.status;
+        if (pollStatus === "completed") {
           setResult((current) =>
             current
               ? {
@@ -90,21 +206,39 @@ export function InboundRouting() {
                   qualification: update.qualification ?? current.qualification,
                   person: update.person ?? current.person,
                   contact: update.contact ?? current.contact,
+                  route: update.route ?? current.route,
                   trace: update.trace ?? current.trace,
+                  // Late enrichment must not rewrite how long the booking route took.
+                  elapsedMs: current.elapsedMs,
                   enrichment: { leadId, status: "completed" },
                 }
               : current,
           );
           return;
         }
-        if (update.status === "failed" || update.status === "unavailable" || attempts >= 18) {
+        if (pollStatus === "pending" && (update.company || update.person || update.contact)) {
+          setResult((current) =>
+            current
+              ? {
+                  ...current,
+                  company: update.company ?? current.company,
+                  qualification: update.qualification ?? current.qualification,
+                  person: update.person ?? current.person,
+                  contact: update.contact ?? current.contact,
+                  trace: update.trace ?? current.trace,
+                  enrichment: { leadId, status: "pending" },
+                }
+              : current,
+          );
+        }
+        if (pollStatus === "failed" || pollStatus === "unavailable" || attempts >= 18) {
           setResult((current) =>
             current
               ? {
                   ...current,
                   enrichment: {
                     leadId,
-                    status: update.status === "unavailable" ? "unavailable" : "failed",
+                    status: pollStatus === "unavailable" ? "unavailable" : "failed",
                   },
                   trace: update.trace ?? current.trace,
                 }
@@ -133,38 +267,41 @@ export function InboundRouting() {
     setBusy(true);
     setError(null);
     const body = Object.fromEntries(new FormData(event.currentTarget));
-    const activeSession = dryRun ? demoSession ?? `inbound-demo-${crypto.randomUUID()}` : null;
     try {
-      if (dryRun) {
-        const session = activeSession!;
-        setDemoSession(session);
-        const started = await fetch('/api/booking-demo/start', {method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({email:body.email,session_id:session,dry_run:true})});
+      if (!emailAccepted) {
+        const response = await fetch("/api/inbound-lead/capture", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email }),
+        });
+        const captured = await response.json();
+        if (!response.ok) throw new Error(captured.error || "Could not save your progress.");
+        setCaptureId(captured.captureId);
+        setProgressSaved(captured.persisted === true);
+        setEmailAccepted(true);
+        return;
+      }
+      const activeSession = dryRun ? (demoSession || `inbound-demo-${crypto.randomUUID()}`) : null;
+      if (activeSession) {
+        setDemoSession(activeSession);
+        const started = await fetch('/api/booking-demo/start', {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ session_id: activeSession, email, dry_run: true }),
+        });
         const receipt = await started.json();
-        if (!started.ok) throw new Error(receipt.error ?? 'Could not start the demo timer');
+        if (!started.ok) throw new Error(receipt.error || 'Could not start the cloud timer.');
       }
       const response = await fetch("/api/inbound-lead/qualify", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({...body, dryRun}),
+        body: JSON.stringify({ ...body, captureId, dryRun }),
       });
       const payload = (await response.json()) as Result & { error?: string };
       if (!response.ok || !payload.route)
         throw new Error(payload.error || "Could not qualify this lead.");
-      if (dryRun) {
-        const url = new URL(payload.route.owner.bookingUrl);
-        url.searchParams.set('utm_source','deepline-demo');
-        // The session is stable across retries; the webhook uses it to correlate a booking.
-        const formSession = activeSession;
-        if (formSession) url.searchParams.set('utm_content',formSession);
-        payload.route.owner.bookingUrl = url.href;
-      }
       setResult(payload);
     } catch (caught) {
-      setError(
-        caught instanceof Error
-          ? caught.message
-          : "Could not qualify this lead.",
-      );
+      setError(caught instanceof Error ? caught.message : "Could not qualify this lead.");
     } finally {
       setBusy(false);
     }
@@ -172,9 +309,9 @@ export function InboundRouting() {
   if (result)
     return (
       <section className="card result">
-        {dryRun && demoSession && <div className="routing-status" role="status">
+        {demoSession && <div role="status" style={{padding:16,background:'#f4f3ff',marginBottom:16}}>
           <b>30-minute cloud check started</b>
-          <span>Leave this calendar unbooked. Deepline will log the result. No follow-up email is sent.</span>
+          <p>Leave this calendar unbooked. Deepline will log the result. No follow-up email is sent.</p>
           <small>Session: {demoSession}</small>
         </div>}
         <div className="success">
@@ -184,7 +321,10 @@ export function InboundRouting() {
         </div>
         <div className="company">
           {result.company.logoUrl ? (
-            <img src={result.company.logoUrl} alt="" />
+            <img
+              src={result.company.logoUrl}
+              alt={`${result.company.name || result.company.domain} logo`}
+            />
           ) : (
             <b>{(result.company.name || result.company.domain)[0]}</b>
           )}
@@ -194,9 +334,7 @@ export function InboundRouting() {
           </div>
         </div>
         <div className="score">
-          <span>
-            {result.route.isFallback ? "Verification status" : "Live fit score"}
-          </span>
+          <span>{result.route.isFallback ? "Verification status" : "Live fit score"}</span>
           <strong>
             {result.route.isFallback
               ? "You’re connected — details can follow"
@@ -205,10 +343,7 @@ export function InboundRouting() {
           <i>
             <b style={{ width: `${result.qualification.fitScore}%` }} />
           </i>
-          <p>
-            {result.qualification.signals.join(" · ") ||
-              "Limited public signals"}
-          </p>
+          <p>{result.qualification.signals.join(" · ") || "Limited public signals"}</p>
         </div>
         {result.enrichment?.status === "pending" && (
           <div className="routing-status" aria-live="polite">
@@ -216,60 +351,67 @@ export function InboundRouting() {
             <span>We’ll add the company profile here automatically.</span>
           </div>
         )}
-        {(result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable") && (
+        {(result.enrichment?.status === "failed" ||
+          result.enrichment?.status === "unavailable") && (
           <div className="routing-status" aria-live="polite">
             <b>Your booking route is ready.</b>
             <span>
-              Company verification did not finish. Your route was kept available instead of blocking you.
+              Company verification did not finish. Your route was kept available instead of blocking
+              you.
             </span>
           </div>
         )}
         <section className="owner" aria-label="Your routed Deepline expert">
           <div>
             <small>
-              {result.route.isFallback
-                ? "Your verified handoff"
-                : "Your Deepline expert"}
+              {result.route.isFallback ? "Your verified handoff" : "Your Deepline expert"}
             </small>
             <h2>{result.route.owner.name}</h2>
             <p className="owner-copy">
-              {isChiragRoute
+              {hasEmbeddedCalendar
                 ? "Choose a time below—your routing is complete."
                 : "Your route is ready. Choose a time that works for you."}
             </p>
           </div>
-          {!isChiragRoute && (
+          {!hasEmbeddedCalendar && (
             <a
-              href={result.route.owner.bookingUrl}
+              className="calendar-cta"
+              href={bookingUrl}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
             >
-              Open calendar →
+              Open calendar in a new tab ↗
             </a>
           )}
-          {isChiragRoute && (
-            <div className="calendar-embed">
-              <iframe
-                src={result.route.owner.bookingUrl}
-                title="Book time with Chirag Toprani"
-                loading="eager"
-              />
-              <a href={result.route.owner.bookingUrl} target="_blank" rel="noreferrer">
-                Open Chirag’s calendar in a new tab →
-              </a>
-            </div>
+          {hasEmbeddedCalendar && (
+            <CalendarEmbed
+              bookingUrl={bookingUrl}
+              ownerName={result.route.owner.name}
+            />
           )}
         </section>
         {result.person && (
           <details className="evidence person-enrichment" open>
-            <summary>Verified person profile</summary>
+            <summary>Live contact enrichment</summary>
             <div className="evidence-grid">
-              <span>Title <b>{result.person.title || "Not returned"}</b></span>
-              <span>Seniority <b>{result.person.seniority || "Not returned"}</b></span>
-              <span>Role <b>{result.person.role || "Not returned"}</b></span>
-              <span>Location <b>{result.person.location || "Not returned"}</b></span>
-              <span>Source <b>{result.person.enrichmentSource}</b></span>
-              <span>Identity <b>Work email verified</b></span>
+              <span>
+                Title <b>{result.person.title || "Not returned"}</b>
+              </span>
+              <span>
+                Seniority <b>{result.person.seniority || "Not returned"}</b>
+              </span>
+              <span>
+                Role <b>{result.person.role || "Not returned"}</b>
+              </span>
+              <span>
+                Location <b>{result.person.location || "Not returned"}</b>
+              </span>
+              <span>
+                Source <b>{result.person.enrichmentSource}</b>
+              </span>
+              <span>
+                Identity <b>Work email verified</b>
+              </span>
             </div>
             {result.person.linkedinUrl && (
               <a href={result.person.linkedinUrl} target="_blank" rel="noreferrer">
@@ -278,29 +420,132 @@ export function InboundRouting() {
             )}
           </details>
         )}
+        <details className="evidence company-enrichment" open>
+          <summary>Live company enrichment</summary>
+          <div className="evidence-grid">
+            <span>
+              People{" "}
+              <b>
+                {result.company.employeeRange ??
+                  result.company.employeeCount?.toLocaleString() ??
+                  "Not returned"}
+              </b>
+            </span>
+            <span>
+              Sales team <b>{result.company.salesTeamSize?.toLocaleString() ?? "Not returned"}</b>
+            </span>
+            <span>
+              Revenue <b>{result.company.revenue ?? "Not returned"}</b>
+            </span>
+            <span>
+              Industry <b>{result.company.industry || "Not returned"}</b>
+            </span>
+            <span>
+              Geo <b>{result.company.location || "Not returned"}</b>
+            </span>
+            <span>
+              Technology <b>{result.company.technologies.join(", ") || "Not returned"}</b>
+            </span>
+            <span>
+              Source <b>{result.company.enrichmentSource}</b>
+            </span>
+          </div>
+        </details>
         {result.contact && (
-          <details className="evidence contact-enrichment" open>
-            <summary>Contact verification</summary>
-            <p className={`contact-verdict ${result.contact.identityStatus}`}>
-              {result.contact.identityStatus === "verified"
-                ? `Verified person · ${result.contact.source}`
-                : "Company verified · no exact person profile returned for this work email"}
-            </p>
+          <details className="evidence" open>
+            <summary>HubSpot record</summary>
             <div className="evidence-grid">
-              <span>Email identity <b>{result.contact.identityStatus === "verified" ? "Exact work-email match" : "Not verified"}</b></span>
-              <span>Title <b>{result.contact.identityStatus === "verified" ? result.contact.title || "Not returned" : "Not verified"}</b></span>
-              <span>Company revenue <b>{result.contact.revenue || "Not returned by sources"}</b></span>
-              <span>Calendar offered <b>{result.contact.calendarOwner}</b></span>
-              <span>HubSpot sync <b>{result.contact.hubspotSync === "updated" ? "Updated without overwriting existing fields" : result.contact.hubspotSync === "not_needed" ? "Already complete" : result.contact.hubspotSync === "failed" ? "Needs retry" : result.contact.hubspotSync === "pending" ? "Syncing missing fields" : "No existing contact to update"}</b></span>
+              <span>
+                CRM contact{" "}
+                <b>
+                  {result.contact.hubspotContactMatched
+                    ? "Matched"
+                    : result.contact.hubspotContactUnavailable
+                      ? "Lookup unavailable"
+                      : "No matching contact"}
+                </b>
+              </span>
+              <span>
+                CRM account{" "}
+                <b>
+                  {result.contact.hubspotCompanyMatched
+                    ? "Matched"
+                    : result.contact.hubspotCompanyUnavailable
+                      ? "Lookup unavailable"
+                      : "No matching account"}
+                </b>
+              </span>
+              <span>
+                Fill-only sync{" "}
+                <b>
+                  {result.contact.hubspotSync === "updated"
+                    ? "Updated missing fields"
+                    : result.contact.hubspotSync === "not_needed"
+                      ? "Already complete"
+                      : result.contact.hubspotSync === "failed"
+                        ? "Needs retry"
+                        : result.contact.hubspotSync === "pending"
+                          ? "In progress"
+                          : "Not applicable"}
+                </b>
+              </span>
             </div>
-            {result.contact.identityStatus === "not_verified" && (
-              <p className="contact-note">The route uses verified company and CRM signals only. We do not infer a title, seniority, or person record without an exact email match.</p>
-            )}
+            <p className="contact-note">
+              CRM fields stay separate from live enrichment. When a contact exists, only empty
+              supported fields are filled; populated fields are never overwritten.
+            </p>
+          </details>
+        )}
+        {result.trace.waterfalls && (
+          <details className="evidence sdk-waterfall">
+            <summary>Deepline SDK waterfall</summary>
+            <p>
+              Company and contact checks run together. Inside each lane, People Data Labs runs only
+              when CrustData does not return a usable match.
+            </p>
+            {result.trace.waterfalls.map((waterfall) => (
+              <div className="waterfall-lane" key={waterfall.entity}>
+                <h3>{waterfall.entity} enrichment</h3>
+                {waterfall.attempts.map((attempt) => (
+                  <div className="waterfall-step" key={`${waterfall.entity}-${attempt.order}`}>
+                    <span className="waterfall-order">{attempt.order}</span>
+                    <div>
+                      <b>{attempt.provider}</b>
+                      <code>{attempt.tool}</code>
+                      <small>{attempt.detail}</small>
+                    </div>
+                    <div className="waterfall-outcome">
+                      <em data-status={attempt.status}>{attempt.status}</em>
+                      {attempt.durationMs > 0 && <small>{attempt.durationMs}ms</small>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="sdk-note">
+              Every provider call above uses <code>deepline.tools.execute()</code>. Provider
+              credentials stay in the Deepline workspace.
+            </p>
+          </details>
+        )}
+        {result.company.auth && (
+          <details className="evidence" aria-label="Optional authentication stack fingerprint">
+            <summary>Optional custom signal · authentication stack</summary>
+            <h3>{result.company.auth.provider ?? "No public fingerprint found"}</h3>
+            <p>{result.company.auth.detail}</p>
+            <div className="evidence-grid">
+              <span>
+                Confidence <b>{result.company.auth.confidence}</b>
+              </span>
+              <span>
+                Source <b>{result.company.auth.source.replaceAll("_", " ")}</b>
+              </span>
+            </div>
           </details>
         )}
         <details className="evidence">
           <summary>Show live routing evidence</summary>
-          <h3>Parallel APIs</h3>
+          <h3>Supporting checks</h3>
           {result.trace.providers.map((provider) => (
             <div className="evidence-row" key={provider.name}>
               <b>{provider.name}</b>
@@ -320,24 +565,25 @@ export function InboundRouting() {
             <span>
               People{" "}
               <b>
-                {result.trace.routing.company.employeeCount?.toLocaleString() ||
+                {result.trace.routing.company.employeeRange ??
+                  result.trace.routing.company.employeeCount?.toLocaleString() ??
                   "Not returned"}
               </b>
             </span>
             <span>
               Sales team{" "}
               <b>
-                {result.trace.routing.company.salesTeamSize?.toLocaleString() ||
-                  "Not returned"}
+                {result.trace.routing.company.salesTeamSize?.toLocaleString() || "Not returned"}
               </b>
             </span>
             <span>
-              Geo{" "}
-              <b>{result.trace.routing.company.location || "Not returned"}</b>
+              Geo <b>{result.trace.routing.company.location || "Not returned"}</b>
             </span>
             <span>
-              Industry{" "}
-              <b>{result.trace.routing.company.industry || "Not returned"}</b>
+              Industry <b>{result.trace.routing.company.industry || "Not returned"}</b>
+            </span>
+            <span>
+              Auth <b>{authProviderLabel(result.company.auth, result.enrichment?.status)}</b>
             </span>
           </div>
           {result.trace.routing.attributes && (
@@ -355,18 +601,21 @@ export function InboundRouting() {
         </details>
         {result.company.fullProfile && (
           <details className="evidence full-enrichment">
-          <summary>Full company payload (advanced)</summary>
+            <summary>Full company payload (advanced)</summary>
             <p>
-              Every returned field used to verify this company. No provider key
-              or internal credential is included.
+              Complete selected provider payload. The fields above are reconciled from this source;
+              no provider key or internal credential is included.
             </p>
             <pre>{JSON.stringify(result.company.fullProfile, null, 2)}</pre>
           </details>
         )}
         {result.person?.fullProfile && (
           <details className="evidence full-enrichment">
-            <summary>Full person enrichment payload</summary>
-            <p>Only an exact work-email match is shown here.</p>
+            <summary>Professional contact payload</summary>
+            <p>
+              Only professional fields from an exact work-email match are requested and shown.
+              Personal emails and phone numbers never reach the browser.
+            </p>
             <pre>{JSON.stringify(result.person.fullProfile, null, 2)}</pre>
           </details>
         )}
@@ -374,56 +623,98 @@ export function InboundRouting() {
           <summary>How this route was chosen</summary>
           <ol>
             <li>A confirmed HubSpot owner always wins and keeps the relationship intact.</li>
-            <li>Existing customers and deployment roles go to Anand.</li>
-            <li>GTM roles, sales teams over 20, or companies with 250+ people go to Jai.</li>
+            <li>Existing customers go to Anand.</li>
+            <li>Sales teams over 20 or companies with 250+ people go to Jai.</li>
+            <li>Deployment roles go to Anand; GTM systems roles go to Jai.</li>
             <li>Other verified companies go to Chirag.</li>
-            <li>If no confident route is available within five seconds, Anand is the safe default while enrichment continues.</li>
+            <li>
+              If no confident route is available within five seconds, Anand is the safe default
+              while enrichment continues.
+            </li>
           </ol>
         </details>
-        <button onClick={() => { setResult(null); setDemoSession(null); }}>Start over</button>
+        <button
+          onClick={() => {
+            setResult(null);
+            setDemoSession(null);
+            setEmailAccepted(false);
+            setCaptureId(null);
+          }}
+        >
+          Start over
+        </button>
       </section>
     );
   return (
     <form className="card" onSubmit={submit}>
       <small>REALTIME ROUTING</small>
       <h2>Find your Deepline person.</h2>
-      <p>Share your name and work email. We’ll handle the rest.</p>
-      <label>
-        First name
-        <input name="firstName" required placeholder="Avery" />
-      </label>
-      <label>
-        Last name
-        <input name="lastName" required placeholder="Morgan" />
-      </label>
+      <p>Start with your work email. Then we’ll find the right calendar.</p>
       <label>
         Work email
         <input
           name="email"
-          onChange={() => setDemoSession(null)}
           type="email"
           required
+          maxLength={254}
+          autoComplete="email"
           placeholder="avery@company.com"
+          value={email}
+          readOnly={emailAccepted}
+          onChange={(event) => { setEmail(event.target.value); setDemoSession(null); }}
         />
       </label>
+      {emailAccepted && (
+        <button
+          type="button"
+          onClick={() => {
+            setEmailAccepted(false);
+            setCaptureId(null);
+          }}
+        >
+          Change email
+        </button>
+      )}
+      {emailAccepted && (
+        <>
+          <label>
+            First name
+            <input name="firstName" autoComplete="given-name" required placeholder="Avery" />
+          </label>
+          <label>
+            Last name
+            <input name="lastName" autoComplete="family-name" required placeholder="Morgan" />
+          </label>
+          <p>
+            {progressSaved
+              ? "Email saved for 24 hours. Submit below to request a demo and follow-up."
+              : "Progress isn’t saved on this demo. Submit below to request a demo and follow-up."}
+          </p>
+        </>
+      )}
+      {!emailAccepted && (
+        <p>
+          Continue shares your email. Follow-up starts only after you request a demo.
+        </p>
+      )}
       {error && (
         <div role="alert" className="error">
           {error}
         </div>
       )}
-      <label style={{display:'flex',alignItems:'start',gap:10,fontSize:14}}>
-        <input type="checkbox" checked={dryRun} onChange={e=>setDryRun(e.target.checked)} style={{width:18,marginTop:2}} />
+      {emailAccepted && <label style={{display:'flex',alignItems:'start',gap:10}}>
+        <input type="checkbox" checked={dryRun} onChange={event=>{ setDryRun(event.target.checked); if (!event.target.checked) setDemoSession(null); }} style={{width:'auto'}} />
         <span>Test the 30-minute follow-up check. Internal test email only; no messages or CRM updates.</span>
-      </label>
-      {busy && (
+      </label>}
+      {busy && emailAccepted && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>
-          <span>Checking your account, company, and existing owner in parallel.</span>
+          <span>Checking HubSpot while Deepline runs CrustData → PDL on misses.</span>
           <span>We’ll always give you a person to book with.</span>
         </div>
       )}
       <button disabled={busy}>
-        {busy ? "Finding your person…" : "Find my person →"}
+        {busy ? "Working…" : emailAccepted ? "Request a demo →" : "Continue →"}
       </button>
     </form>
   );

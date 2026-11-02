@@ -89,8 +89,9 @@ h1 em {
   font: inherit;
 }
 .card button,
-.owner a {
+.owner a.calendar-cta {
   display: inline-block;
+  min-height: 44px;
   border: 0;
   margin-top: 24px;
   padding: 14px 18px;
@@ -99,6 +100,15 @@ h1 em {
   font-weight: bold;
   text-decoration: none;
   cursor: pointer;
+}
+.owner a.calendar-cta {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 13px 18px;
+  font-size: 14px;
+  line-height: 1.2;
 }
 .card button:disabled {
   opacity: 0.6;
@@ -203,18 +213,38 @@ h1 em {
   width: 100%;
   margin-top: 2px;
 }
-.calendar-embed iframe {
+.calendar-embed a.calendar-cta {
+  width: 100%;
+  margin: 0 0 10px;
+}
+.calendar-frame {
+  position: relative;
+  min-height: 660px;
+  overflow: hidden;
+  border: 1px solid #b7b9c8;
+  background: var(--paper);
+}
+.calendar-frame iframe {
+  position: relative;
+  z-index: 1;
   display: block;
   width: 100%;
   height: 660px;
-  border: 1px solid var(--line);
-  background: var(--paper);
+  border: 0;
+  background: #fff;
 }
-.calendar-embed a {
-  display: inline-block;
-  margin-top: 10px;
-  color: var(--ink);
+.calendar-loading {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--paper);
+  color: var(--muted);
   font-size: 12px;
+  line-height: 1.5;
+  text-align: center;
 }
 .result > button {
   background: transparent;
@@ -251,6 +281,84 @@ h1 em {
   font-size: 10px;
   font-style: normal;
   text-transform: uppercase;
+}
+.sdk-waterfall {
+  border-color: #bfc1d8;
+  background: #fbfbff;
+}
+.waterfall-lane + .waterfall-lane {
+  margin-top: 18px;
+}
+.waterfall-step {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.waterfall-order {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  color: var(--muted);
+  font: 10px ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.waterfall-step b,
+.waterfall-step code,
+.waterfall-step small {
+  display: block;
+}
+.waterfall-step code {
+  margin-top: 3px;
+  color: var(--blue);
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.waterfall-step small {
+  margin-top: 4px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+.waterfall-outcome {
+  text-align: right;
+}
+.waterfall-outcome em {
+  display: inline-block;
+  padding: 3px 6px;
+  border-radius: 999px;
+  background: #e7f6ee;
+  color: #146b47;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.waterfall-outcome em[data-status="miss"],
+.waterfall-outcome em[data-status="skipped"],
+.waterfall-outcome em[data-status="pending"] {
+  background: #ececf3;
+  color: #5d6070;
+}
+.waterfall-outcome em[data-status="error"] {
+  background: #ffe9ed;
+  color: #9b1230;
+}
+.waterfall-outcome em[data-status="partial"] {
+  background: #fff4d6;
+  color: #765100;
+}
+.sdk-note {
+  margin-bottom: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+.sdk-note code {
+  color: var(--ink);
+  font-size: 11px;
 }
 .evidence-row small {
   grid-column: 1 / -1;
@@ -312,20 +420,53 @@ h1 em {
   overflow: hidden;
   color: var(--ink);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
-@media (max-width: 800px) {
+.card input:focus-visible,
+.card button:focus-visible,
+.owner a:focus-visible,
+.evidence summary:focus-visible {
+  outline: 3px solid #2926ff45;
+  outline-offset: 2px;
+}
+.owner a.calendar-cta:focus-visible {
+  outline: 3px solid var(--ink);
+  outline-offset: 3px;
+}
+@media (max-width: 960px) {
   .shell {
     grid-template-columns: 1fr;
-    padding: 52px 20px;
-    gap: 42px;
+    padding: 32px 20px;
+    gap: 28px;
+  }
+  .copy h1 {
+    margin: 14px 0 18px;
+    font-size: 40px;
+  }
+  .copy p {
+    margin-bottom: 0;
+  }
+  .copy ul {
+    display: none;
+  }
+  .card {
+    padding: 28px;
   }
   .owner {
     align-items: start;
     flex-direction: column;
   }
-  .calendar-embed iframe {
+  .calendar-frame {
+    width: calc(100% + 96px);
+    min-height: 620px;
+    margin-left: -48px;
+    border-right: 0;
+    border-left: 0;
+  }
+  .calendar-frame iframe {
     height: 620px;
+  }
+  .owner a.calendar-cta {
+    width: 100%;
   }
 }
