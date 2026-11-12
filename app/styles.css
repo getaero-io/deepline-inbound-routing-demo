@@ -134,6 +134,15 @@ h1 em {
 .routing-status span {
   color: var(--muted);
 }
+.routing-status progress {
+  width: 100%;
+  height: 8px;
+  accent-color: var(--blue);
+}
+.routing-status ol {
+  margin: 4px 0;
+  padding-inline-start: 20px;
+}
 .company {
   display: flex;
   gap: 14px;
