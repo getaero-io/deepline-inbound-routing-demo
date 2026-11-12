@@ -41,7 +41,7 @@ export function selectRepBooking<T extends RepFitCandidate & { bookingUrl: strin
   candidates: readonly T[],
   fallbackUrl: string,
 ) {
-  const eligible = candidates.filter(({ bookingUrl }) => bookingUrl !== null);
+  const eligible = candidates.filter(({ bookingUrl }) => Boolean(bookingUrl?.trim()));
   const winner = rankRepFit(lead, eligible)[0];
   if (!winner || !winner.score || !winner.rep.bookingUrl) {
     return { bookingUrl: fallbackUrl, repId: null, score: 0, reasons: [] };

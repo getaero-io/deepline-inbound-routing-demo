@@ -47,3 +47,16 @@ for (const { name, attributes, expected, score, signals } of cases) {
     expect(result.bookingUrl).toBe(expected ? `https://booking.example/${expected}` : fallback);
   });
 }
+
+test("blank booking links cannot hide an available lower-fit rep", () => {
+  for (const bookingUrl of ["", "   "]) {
+    const result = selectRepBooking(
+      { industry: ["B2B software"], specialty: ["Data integration"] },
+      [{ ...reps[0], bookingUrl }, reps[1]],
+      fallback,
+    );
+    expect(result.repId).toBe("healthcare");
+    expect(result.bookingUrl).toBe("https://booking.example/healthcare");
+    expect(result.score).toBe(35);
+  }
+});
