@@ -367,6 +367,7 @@ export function InboundRouting({
               {result.route.isFallback ? "Your verified handoff" : "Your Deepline expert"}
             </small>
             <h2>{result.route.owner.name}</h2>
+            <p>{result.trace.routing.appliedRule}</p>
             <p className="owner-copy">
               {hasEmbeddedCalendar
                 ? "Choose a time below—your routing is complete."
@@ -554,7 +555,6 @@ export function InboundRouting({
             </div>
           ))}
           <h3>Applied rule</h3>
-          <p>{result.trace.routing.appliedRule}</p>
           <div className="evidence-grid">
             <span>
               Priority <b>{result.trace.routing.priorityScore}/100</b>

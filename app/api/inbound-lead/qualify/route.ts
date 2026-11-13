@@ -399,7 +399,9 @@ export async function POST(request: Request) {
   try {
     crm = await withinDeadline(crmWork, ROUTE_DEADLINE_MS - (Date.now() - started));
     const owner = configuredOwner(crm.ownerId);
-    if (owner || crm.existingCustomer) {
+    if (crm.ownerId && !owner) {
+      route = fallbackDecision("The HubSpot owner has no configured calendar. Use the backup calendar while keeping the existing owner.");
+    } else if (owner || crm.existingCustomer) {
       route = {
         ...routeLead({
           company: null,
