@@ -55,6 +55,7 @@ export async function lookupHubSpot(
   email: string,
   domain: string,
   runner: ToolRunner = executeTool,
+  verifiedLinkedInUrl?: string,
 ): Promise<HubSpotResult> {
   const revenueProperty =
     process.env.INBOUND_DEMO_HUBSPOT_CONTACT_REVENUE_PROPERTY?.trim();
@@ -78,15 +79,19 @@ export async function lookupHubSpot(
         ...(revenueProperty ? [revenueProperty] : []),
         ...(calendarProperty ? [calendarProperty] : []),
       ],
-      limit: 1,
+      limit: 2,
       filter_groups: [
-        { filters: [{ propertyName: "email", operator: "EQ", value: email }] },
+        { filters: [{
+          propertyName: verifiedLinkedInUrl ? "hs_linkedin_url" : "email",
+          operator: "EQ",
+          value: verifiedLinkedInUrl ?? email,
+        }] },
       ],
     }),
     runner("hubspot_search_objects", {
       object_type: "companies",
       properties: ["hubspot_owner_id", "lifecyclestage", "annualrevenue"],
-      limit: 1,
+      limit: 2,
       filter_groups: [
         { filters: [{ propertyName: "domain", operator: "EQ", value: domain }] },
       ],
@@ -103,8 +108,10 @@ export async function lookupHubSpot(
   const companyRaw =
     outcomes[1].status === "fulfilled" ? outcomes[1].value : null;
 
-  const contactRow = rows(contactRaw)[0];
-  const companyRow = rows(companyRaw)[0];
+  const contactRows = rows(contactRaw);
+  const companyRows = rows(companyRaw);
+  const contactRow = contactRows.length === 1 ? contactRows[0] : undefined;
+  const companyRow = companyRows.length === 1 ? companyRows[0] : undefined;
   const contact = properties(contactRow);
   const company = properties(companyRow);
   const records = [contact, company].filter(
@@ -113,7 +120,7 @@ export async function lookupHubSpot(
 
   return {
     ownerId:
-      records.map((value) => text(value.hubspot_owner_id)).find(Boolean) ?? null,
+      text(company?.hubspot_owner_id) ?? text(contact?.hubspot_owner_id),
     existingCustomer: records.some((value) =>
       ["customer", "evangelist"].includes(
         String(value.lifecyclestage ?? "").toLowerCase(),
@@ -127,8 +134,8 @@ export async function lookupHubSpot(
       text(company?.annualrevenue),
     contactMatched: Boolean(contact),
     companyMatched: Boolean(company),
-    contactUnavailable: outcomes[0].status === "rejected",
-    companyUnavailable: outcomes[1].status === "rejected",
+    contactUnavailable: outcomes[0].status === "rejected" || contactRows.length > 1,
+    companyUnavailable: outcomes[1].status === "rejected" || companyRows.length > 1,
     matched: Boolean(contact || company),
   };
 }

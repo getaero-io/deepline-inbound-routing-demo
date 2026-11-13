@@ -416,6 +416,20 @@ export async function POST(request: Request) {
     });
   const companyWork = enrichCompany(domain);
   const personWork = enrichPerson({ email, firstName, lastName });
+  const identityWork = crmWork.then(async (initial) => {
+    if (initial.contactMatched || initial.contactUnavailable) return initial;
+    const profile = (await personWork.catch(() => null))?.person;
+    const url = profile?.linkedinUrl;
+    if (profile?.email.toLowerCase() !== email.toLowerCase() || !url ||
+        !/^https:\/\/(?:www\.)?linkedin\.com\/in\/[a-z0-9_%.-]+\/?$/i.test(url)) {
+      return initial;
+    }
+    const confirmed = await lookupHubSpot(email, domain, undefined, url).catch(() => null);
+    if (!confirmed || confirmed.contactUnavailable || confirmed.companyUnavailable) {
+      return { ...initial, contactUnavailable: true };
+    }
+    return confirmed.contactMatched ? confirmed : initial;
+  });
   const authWork = withinDeadline(
     companyWork.then(async ({ company }) => {
         const technologySignal = authFromTechnologies(company?.technologies ?? []);
@@ -434,11 +448,17 @@ export async function POST(request: Request) {
 
   try {
     crm = await withinDeadline(
-      crmWork,
+      crmWork.then((initial) =>
+        initial.ownerId || initial.existingCustomer ? initial : identityWork,
+      ),
       ROUTE_DEADLINE_MS - (Date.now() - started),
     );
     const owner = configuredOwner(crm.ownerId);
-    if (owner || crm.existingCustomer) {
+    if (crm.ownerId && !owner) {
+      route = fallbackDecision(
+        "This account already has a HubSpot owner. A backup calendar is available because that owner has no configured booking link.",
+      );
+    } else if (owner || crm.existingCustomer) {
       route = {
         ...routeLead({
           company: null,
@@ -500,7 +520,7 @@ export async function POST(request: Request) {
   const stableRoute = route;
   after(async () => {
     const [finalCrmOutcome, companyOutcome, personOutcome] =
-      await Promise.allSettled([crmWork, companyWork, personWork]);
+      await Promise.allSettled([identityWork, companyWork, personWork]);
     const finalCrm =
       finalCrmOutcome.status === "fulfilled" ? finalCrmOutcome.value : crm;
     const finalCompany =

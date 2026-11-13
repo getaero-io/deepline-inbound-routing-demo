@@ -193,7 +193,7 @@ export function InboundRouting({
                   qualification: update.qualification ?? current.qualification,
                   person: update.person ?? current.person,
                   contact: update.contact ?? current.contact,
-                  route: update.route ?? current.route,
+                  route: current.route,
                   trace: update.trace ?? current.trace,
                   // Late enrichment must not rewrite how long the booking route took.
                   elapsedMs: current.elapsedMs,
@@ -279,7 +279,7 @@ export function InboundRouting({
       <section className="card result">
         <div className="success">
           {result.route.isFallback
-            ? "ROUTE RESERVED"
+            ? `BACKUP CALENDAR READY IN ${(result.elapsedMs / 1000).toFixed(1)}S`
             : `ROUTED IN ${(result.elapsedMs / 1000).toFixed(1)}S`}
         </div>
         <div className="company">
@@ -315,8 +315,8 @@ export function InboundRouting({
         </div>
         {result.enrichment?.status === "pending" && (
           <div className="routing-status" aria-live="polite">
-            <b>Route is ready. Verification is still arriving.</b>
-            <span>We’ll add the company profile here automatically.</span>
+            <b>Calendar ready. Enrichment is still running.</b>
+            <span>Company, contact, and fit details update here as they arrive. You can book now.</span>
           </div>
         )}
         {(result.enrichment?.status === "failed" || result.enrichment?.status === "unavailable") && (
@@ -335,6 +335,7 @@ export function InboundRouting({
                 : "Your Deepline expert"}
             </small>
             <h2>{result.route.owner.name}</h2>
+            <p>{result.trace.routing.appliedRule}</p>
             <p className="owner-copy">
               {hasEmbeddedCalendar
                 ? "Choose a time below—your routing is complete."
@@ -453,7 +454,6 @@ export function InboundRouting({
             </div>
           ))}
           <h3>Applied rule</h3>
-          <p>{result.trace.routing.appliedRule}</p>
           <div className="evidence-grid">
             <span>
               Priority <b>{result.trace.routing.priorityScore}/100</b>
@@ -571,10 +571,15 @@ export function InboundRouting({
         </div>
       )}
       {busy && (
-        <div className="routing-status" aria-live="polite">
-          <b>Finding the fastest path</b>
-          <span>Checking HubSpot while Deepline runs CrustData → PDL on misses.</span>
-          <span>We’ll always give you a person to book with.</span>
+        <div className="routing-status" role="status">
+          <b>Finding your Deepline contact</b>
+          <progress aria-label="Demo routing in progress" />
+          <ol>
+            <li>Check HubSpot for an existing relationship.</li>
+            <li>Enrich your contact and company in parallel.</li>
+            <li>Score the available fit signals and choose a calendar.</li>
+          </ol>
+          <span>Booking can open while enrichment continues.</span>
         </div>
       )}
       <button disabled={busy}>

@@ -70,6 +70,29 @@ describe("fillMissingHubSpotFields", () => {
 });
 
 describe("lookupHubSpot", () => {
+  test("keeps the company owner and reuses a contact confirmed by LinkedIn", async () => {
+    const url = "https://www.linkedin.com/in/robert-example";
+    const runner = mock(async (_tool: string, input: Record<string, unknown>) =>
+      input.object_type === "companies"
+        ? { results: [{ id: "company", properties: { hubspot_owner_id: "account-owner" } }] }
+        : { results: [{ id: "contact", properties: { firstname: "Robert", hubspot_owner_id: "contact-owner" } }] },
+    );
+    const result = await lookupHubSpot("bob@example.com", "example.com", runner, url);
+    expect(result).toMatchObject({ ownerId: "account-owner", contactId: "contact", companyMatched: true });
+    expect(runner.mock.calls[0]?.[1].filter_groups).toEqual([
+      { filters: [{ propertyName: "hs_linkedin_url", operator: "EQ", value: url }] },
+    ]);
+  });
+
+  test("does not pick a duplicate account or contact arbitrarily", async () => {
+    const runner = async () => ({ results: [
+      { id: "one", properties: { hubspot_owner_id: "a" } },
+      { id: "two", properties: { hubspot_owner_id: "b" } },
+    ] });
+    const result = await lookupHubSpot("bob@example.com", "example.com", runner);
+    expect(result).toMatchObject({ ownerId: null, contactId: null, contactUnavailable: true, companyUnavailable: true });
+  });
+
   test("normalizes contact and company matches returned by the SDK", async () => {
     let call = 0;
     const runner = mock(async () => {
