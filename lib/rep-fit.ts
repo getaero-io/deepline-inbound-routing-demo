@@ -48,7 +48,7 @@ export function selectRepBooking<T extends RepFitCandidate & { bookingUrl: strin
   }
   return {
     bookingUrl: winner.rep.bookingUrl,
-    repId: winner.rep.id,
+    repId: winner.rep.id as T["id"],
     score: winner.score,
     reasons: winner.reasons,
   };
