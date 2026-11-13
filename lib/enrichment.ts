@@ -72,6 +72,8 @@ function candidateRecords(value: unknown, depth = 0): RecordValue[] {
     value.company_data,
     value.person,
     value.profile,
+    value.persons,
+    value.contacts,
   ].flatMap((item) => candidateRecords(item, depth + 1));
   return [value, ...nested];
 }
@@ -508,6 +510,31 @@ export async function enrichPerson(
   runner: ToolRunner = executeTool,
 ): Promise<PersonWaterfallResult> {
   const attempts: ProviderAttempt[] = [];
+  if (input.verifiedLinkedInUrl) {
+    const started = Date.now();
+    const profileKey = (url: string) => url.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "").toLowerCase();
+    try {
+      const raw = await runner("search_contact", {
+        contact_linkedin: input.verifiedLinkedInUrl,
+        domain: input.email.split("@")[1],
+        page_size: 3,
+        free_only: true,
+      });
+      const matches = candidateRecords(raw).filter((row) => {
+        const url = stringValue(row.linkedin_url);
+        return url && profileKey(url) === profileKey(input.verifiedLinkedInUrl!);
+      });
+      const person = matches.length === 1
+        ? personProfile({ ...matches[0], work_email: input.email }, input, "HubSpot + Deepline Native")
+        : null;
+      attempts.push(attempt(1, "Deepline Native", "search_contact", person?.title && person.fullName ? "hit" : "miss", started,
+        person?.title && person.fullName ? "Profile matched the LinkedIn URL on the exact-email CRM record." : "No complete CRM-linked profile returned."));
+      if (person?.title && person.fullName) return { person, trace: { entity: "person", attempts } };
+    } catch {
+      attempts.push(attempt(1, "Deepline Native", "search_contact", "error", started, "People search failed; continuing with email lookup."));
+    }
+  }
+  const offset = attempts.length;
   let primaryPerson: PersonProfile | null = null;
   const startedAt = Date.now();
   try {
@@ -518,29 +545,29 @@ export async function enrichPerson(
         "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
     });
     const person = personProfile(raw, input, "CrustData");
-    if (person?.title) {
+    if (person?.title && person.fullName) {
       attempts.push(
-        attempt(1, "CrustData", PERSON_CRUST_TOOL, "hit", startedAt, "Exact-email person profile returned."),
-        attempt(2, "People Data Labs", PERSON_PDL_TOOL, "skipped", Date.now(), "Skipped because CrustData returned an exact-email person profile."),
+        attempt(offset + 1, "CrustData", PERSON_CRUST_TOOL, "hit", startedAt, "Exact-email person profile returned."),
+        attempt(offset + 2, "People Data Labs", PERSON_PDL_TOOL, "skipped", Date.now(), "Skipped because CrustData returned an exact-email person profile."),
       );
       return { person, trace: { entity: "person", attempts } };
     }
     primaryPerson = person;
     attempts.push(
       attempt(
-        1,
+        offset + 1,
         "CrustData",
         PERSON_CRUST_TOOL,
         person ? "partial" : "miss",
         startedAt,
         person
-          ? "Exact-email identity returned without a title; continuing for professional fields."
+          ? "Exact-email profile is missing a name or title; continuing."
           : "No exact-email person profile returned.",
       ),
     );
   } catch {
     attempts.push(
-      attempt(1, "CrustData", PERSON_CRUST_TOOL, "error", startedAt, "Provider request failed; continuing to the next source."),
+      attempt(offset + 1, "CrustData", PERSON_CRUST_TOOL, "error", startedAt, "Provider request failed; continuing to the next source."),
     );
   }
 
@@ -562,7 +589,7 @@ export async function enrichPerson(
         : fallbackPerson ?? primaryPerson;
     attempts.push(
       attempt(
-        2,
+        offset + 2,
         "People Data Labs",
         PERSON_PDL_TOOL,
         fallbackPerson ? "hit" : "miss",
@@ -574,18 +601,35 @@ export async function enrichPerson(
             : "No exact-email person profile returned.",
       ),
     );
-    return { person, trace: { entity: "person", attempts } };
+    primaryPerson = person;
+    if (person?.title && person.fullName) return { person, trace: { entity: "person", attempts } };
   } catch {
     attempts.push(
       attempt(
-        2,
+        offset + 2,
         "People Data Labs",
         PERSON_PDL_TOOL,
         "error",
         fallbackStartedAt,
-        "Provider request failed; the person waterfall is exhausted.",
+        "Provider request failed; trying the next source.",
       ),
     );
-    return { person: primaryPerson, trace: { entity: "person", attempts } };
   }
+  const prospeoStarted = Date.now();
+  try {
+    const raw = await runner("prospeo_enrich_person", { email: input.email, only_verified_email: true });
+    const match = candidateRecords(raw).flatMap((row) => {
+      if (!isRecord(row.email) || row.email.status !== "VERIFIED") return [];
+      return [{ work_email: row.email.email, full_name: row.full_name ?? row.name,
+        title: (isRecord(row.job) ? row.job.title : null) ?? row.current_job_title ?? row.title,
+        linkedin_url: row.linkedin_url }];
+    });
+    const person = personProfile(match, input, "Prospeo");
+    attempts.push(attempt(offset + 3, "Prospeo", "prospeo_enrich_person", person ? "hit" : "miss", prospeoStarted,
+      person ? "Verified exact-email profile returned." : "No verified exact-email profile returned."));
+    if (person) primaryPerson = primaryPerson ? mergePersonProfiles(primaryPerson, person) : person;
+  } catch {
+    attempts.push(attempt(offset + 3, "Prospeo", "prospeo_enrich_person", "error", prospeoStarted, "Reverse-email lookup failed."));
+  }
+  return { person: primaryPerson, trace: { entity: "person", attempts } };
 }

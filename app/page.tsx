@@ -12,18 +12,18 @@ export default async function Page({
       <section className="copy">
         <span>DEEPLINE</span>
         <h1>
-          Talk to us.
+          Find your demo host.
           <br />
-          <em>We’ll find the right team.</em>
+          <em>See why they matched.</em>
         </h1>
         <p>
-          Tell us who you are. We’ll verify your company, preserve an existing Deepline
-          relationship, and put the right calendar in front of you.
+          Enter your work email to see who you’ll meet, what informed the match,
+          and which calendar to book.
         </p>
         <ul>
-          <li>Route first; enrichment updates live; safe handoff by five seconds</li>
-          <li>Work email only — no company form field</li>
-          <li>One Deepline key — swap data sources without rebuilding the app</li>
+          <li>An existing HubSpot owner takes priority.</li>
+          <li>For eligible new leads, industry and specialty help choose the host.</li>
+          <li>A backup calendar opens if qualification takes too long.</li>
         </ul>
       </section>
       <InboundRouting initialEmail={initialEmail} />

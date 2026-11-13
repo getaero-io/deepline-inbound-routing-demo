@@ -35,6 +35,18 @@ const person = (overrides: Partial<PersonProfile> = {}): PersonProfile => ({
 });
 
 describe("routeLead", () => {
+  test("rep industry fit can change the calendar for an unowned lead", () => {
+    const result = routeLead({
+      company: company({ industry: "Airlines and aviation" }),
+      person: person(),
+      crmTitle: null,
+      existingCustomer: false,
+      owner: null,
+    });
+    expect(result.owner).toBe(CALENDARS.anand);
+    expect(result.reason).toContain("industry (+45)");
+    expect(result.reason).toContain("45/100");
+  });
   test("HubSpot owner has highest priority", () => {
     const result = routeLead({
       company: company({ employeeCount: 10_000 }),

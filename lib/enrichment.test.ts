@@ -221,6 +221,34 @@ describe("company enrichment waterfall", () => {
 });
 
 describe("person enrichment waterfall", () => {
+  test("looks up a CRM-linked profile for free before using reverse email providers", async () => {
+    const calls: string[] = [];
+    const result = await enrichPerson({
+      email: "alex@acme.com",
+      verifiedLinkedInUrl: "https://linkedin.com/in/alex",
+    }, async (tool, input) => {
+      calls.push(tool);
+      expect(input.free_only).toBe(true);
+      return { persons: [{ linkedin_url: "https://www.linkedin.com/in/alex/", first_name: "Alex", last_name: "Morgan", title: "GTM Engineer" }] };
+    });
+    expect(calls).toEqual(["search_contact"]);
+    expect(result.person?.fullName).toBe("Alex Morgan");
+  });
+
+  test("recovers an exact verified identity from Prospeo when earlier lookups fail", async () => {
+    const result = await enrichPerson({ email: "alex@acme.com" }, async (tool) => {
+      if (tool === "crustdata_v2_enrich_person") throw new Error("provider unavailable");
+      if (tool === "peopledatalabs_enrich_contact") return {};
+      return { data: { person: {
+        email: { email: "alex@acme.com", status: "VERIFIED" },
+        full_name: "Alex Morgan",
+        current_job_title: "GTM Engineer",
+      } } };
+    });
+    expect(result.person?.enrichmentSource).toBe("Prospeo");
+    expect(result.person?.title).toBe("GTM Engineer");
+    expect(result.trace.attempts.map((step) => step.status)).toEqual(["error", "miss", "hit"]);
+  });
   test("an exact-email CrustData result skips People Data Labs", async () => {
     const calls: string[] = [];
     const runner: ToolRunner = async (tool) => {

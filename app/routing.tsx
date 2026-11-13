@@ -334,10 +334,10 @@ export function InboundRouting({
           </div>
         </div>
         <div className="score">
-          <span>{result.route.isFallback ? "Verification status" : "Live fit score"}</span>
+          <span>Account qualification</span>
           <strong>
             {result.route.isFallback
-              ? "You’re connected — details can follow"
+              ? "Backup calendar selected"
               : `${result.qualification.fitScore}/100 · ${result.qualification.tier.replace("_", " ")}`}
           </strong>
           <i>
@@ -367,6 +367,7 @@ export function InboundRouting({
               {result.route.isFallback ? "Your verified handoff" : "Your Deepline expert"}
             </small>
             <h2>{result.route.owner.name}</h2>
+            <p>{result.trace.routing.appliedRule}</p>
             <p className="owner-copy">
               {hasEmbeddedCalendar
                 ? "Choose a time below—your routing is complete."
@@ -498,10 +499,13 @@ export function InboundRouting({
         )}
         {result.trace.waterfalls && (
           <details className="evidence sdk-waterfall">
-            <summary>Deepline SDK waterfall</summary>
+            <summary>Data sources behind the calendar decision</summary>
             <p>
-              Company and contact checks run together. Inside each lane, People Data Labs runs only
-              when CrustData does not return a usable match.
+              Company size and industry come from CrustData or People Data Labs.
+              Contact data starts with HubSpot. A CRM-linked LinkedIn profile can
+              be checked with Deepline Native People Search. For email lookup,
+              CrustData, People Data Labs, and Prospeo run in that order until a
+              usable profile is found.
             </p>
             {result.trace.waterfalls.map((waterfall) => (
               <div className="waterfall-lane" key={waterfall.entity}>
@@ -553,11 +557,10 @@ export function InboundRouting({
               <small>{provider.detail}</small>
             </div>
           ))}
-          <h3>Applied rule</h3>
-          <p>{result.trace.routing.appliedRule}</p>
+          <h3>Account data used by routing</h3>
           <div className="evidence-grid">
             <span>
-              Priority <b>{result.trace.routing.priorityScore}/100</b>
+              Account qualification <b>{result.trace.routing.priorityScore}/100</b>
             </span>
             <span>
               Title <b>{result.trace.routing.title || "Not returned"}</b>
@@ -620,13 +623,13 @@ export function InboundRouting({
           </details>
         )}
         <details className="evidence routing-logic">
-          <summary>How this route was chosen</summary>
+          <summary>How rep fit selects a calendar</summary>
           <ol>
             <li>A confirmed HubSpot owner always wins and keeps the relationship intact.</li>
             <li>Existing customers go to Anand.</li>
             <li>Sales teams over 20 or companies with 250+ people go to Jai.</li>
-            <li>Deployment roles go to Anand; GTM systems roles go to Jai.</li>
-            <li>Other verified companies go to Chirag.</li>
+            <li>For other leads, matching industry adds 45 points and matching specialty adds 35. The highest scoring eligible host wins. These are the two signals used in the live rep score.</li>
+            <li>Jai covers SaaS and GTM systems. Anand covers deployment, aviation and pharmaceuticals. With no fit match, the routing rules use role and region, then fall back to Chirag for other verified accounts.</li>
             <li>
               If no confident route is available within five seconds, Anand is the safe default
               while enrichment continues.
@@ -677,14 +680,6 @@ export function InboundRouting({
       )}
       {emailAccepted && (
         <>
-          <label>
-            First name
-            <input name="firstName" autoComplete="given-name" required placeholder="Avery" />
-          </label>
-          <label>
-            Last name
-            <input name="lastName" autoComplete="family-name" required placeholder="Morgan" />
-          </label>
           <p>
             {progressSaved
               ? "Email saved for 24 hours. Submit below to request a demo and follow-up."
@@ -709,7 +704,7 @@ export function InboundRouting({
       {busy && emailAccepted && (
         <div className="routing-status" aria-live="polite">
           <b>Finding the fastest path</b>
-          <span>Checking HubSpot while Deepline runs CrustData → PDL on misses.</span>
+          <span>Checking account ownership, company data, and rep fit.</span>
           <span>We’ll always give you a person to book with.</span>
         </div>
       )}

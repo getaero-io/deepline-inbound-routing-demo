@@ -57,6 +57,7 @@ export type ToolRunner = (
 
 export type PersonInput = {
   email: string;
+  verifiedLinkedInUrl?: string;
   firstName?: string | null;
   lastName?: string | null;
 };
