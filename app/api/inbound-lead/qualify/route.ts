@@ -351,13 +351,11 @@ function launchPostRoutePlay(input: Record<string, unknown>) {
 export async function POST(request: Request) {
   const started = Date.now();
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-  const firstName = text(body?.firstName);
-  const lastName = text(body?.lastName);
   const email = text(body?.email)?.toLowerCase();
 
-  if (!firstName || !lastName || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return NextResponse.json(
-      { error: "First name, last name, and a valid work email are required." },
+      { error: "Enter a valid work email." },
       { status: 400 },
     );
   const domain = email.split("@")[1]?.toLowerCase();
@@ -382,7 +380,15 @@ export async function POST(request: Request) {
       return EMPTY_CRM;
     });
   const companyWork = enrichCompany(domain);
-  const personWork = enrichPerson({ email, firstName, lastName });
+  const personWork = crmWork.then((crm) => {
+    const linkedin = text(crm.contactProperties?.hs_linkedin_url);
+    return enrichPerson({
+      email,
+      ...(linkedin && /^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-z0-9_%.-]+\/?$/i.test(linkedin)
+        ? { verifiedLinkedInUrl: linkedin }
+        : {}),
+    });
+  });
   const authWork = withinDeadline(
     companyWork.then(async ({ company }) => {
       const technologySignal = authFromTechnologies(company?.technologies ?? []);
@@ -511,6 +517,9 @@ export async function POST(request: Request) {
       revenue: finalCompany?.company?.revenue ?? finalCrm.revenue,
       calendarUrl: stableRoute.owner.bookingUrl,
     });
+    const [givenName = "", ...surname] = finalPerson?.person?.fullName?.split(/\s+/) ?? [];
+    const firstName = text(finalCrm.contactProperties?.firstname) ?? givenName;
+    const lastName = text(finalCrm.contactProperties?.lastname) ?? surname.join(" ");
     const nurtureWork = body?.dryRun === true ? Promise.resolve() : launchNurture({
       eventId: leadId,
       submittedAt,
