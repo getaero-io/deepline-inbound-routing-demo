@@ -148,7 +148,7 @@ export async function lookupHubSpot(
   const records = [contact, company].filter((value): value is JsonRecord => Boolean(value));
 
   return {
-    ownerId: records.map((value) => text(value.hubspot_owner_id)).find(Boolean) ?? null,
+    ownerId: text(company?.hubspot_owner_id) ?? text(contact?.hubspot_owner_id),
     existingCustomer: records.some((value) =>
       ["customer", "evangelist"].includes(String(value.lifecyclestage ?? "").toLowerCase()),
     ),

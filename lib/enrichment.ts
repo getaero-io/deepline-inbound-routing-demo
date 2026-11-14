@@ -72,6 +72,8 @@ function candidateRecords(value: unknown, depth = 0): RecordValue[] {
     value.company_data,
     value.person,
     value.profile,
+    value.persons,
+    value.contacts,
   ].flatMap((item) => candidateRecords(item, depth + 1));
   return [value, ...nested];
 }
@@ -413,6 +415,26 @@ function attempt(
   };
 }
 
+export function describeLookupFailure(error: unknown) {
+  const record = isRecord(error) ? error : {};
+  const safe = (value: unknown) =>
+    typeof value === "string" && /^[a-zA-Z0-9_-]{1,80}$/.test(value) ? value : null;
+  const code = safe(record.code);
+  const status = typeof record.statusCode === "number" ? record.statusCode : null;
+  const category = safe(record.category);
+  const origin = safe(record.origin);
+  const networkKind = safe(record.networkKind);
+  const timeout = /timeout|timed out/i.test(
+    [code, category, networkKind, error instanceof Error ? error.message : ""].join(" "),
+  );
+  const reason = timeout ? "Lookup timed out" : status === 429 ? "Rate or quota limit" :
+    status === 401 || status === 403 ? "Access denied" :
+    category ? category.replace(/_/g, " ") : networkKind ?? "Lookup failed";
+  const detail = [origin, status ? `HTTP ${status}` : null, code].filter(Boolean);
+  return { code, status, category, origin, networkKind,
+    summary: detail.length ? `${reason} (${detail.join(", ")}).` : `${reason}.` };
+}
+
 function mergePersonProfiles(
   primary: PersonProfile,
   fallback: PersonProfile,
@@ -425,7 +447,7 @@ function mergePersonProfiles(
     role: primary.role ?? fallback.role,
     location: primary.location ?? fallback.location,
     linkedinUrl: primary.linkedinUrl ?? fallback.linkedinUrl,
-    enrichmentSource: "CrustData + People Data Labs",
+    enrichmentSource: `${primary.enrichmentSource} + ${fallback.enrichmentSource}`,
   };
   return {
     ...merged,
@@ -437,155 +459,125 @@ function mergePersonProfiles(
   };
 }
 
+type Source<T> = {
+  provider: string;
+  tool: string;
+  lookup: () => Promise<T | null>;
+  usable?: (value: T) => boolean;
+};
+
+async function lookupTogether<T>(
+  sources: Source<T>[],
+  choose: (matches: T[]) => T | null,
+  progress: (result: T | null, attempts: ProviderAttempt[]) => void,
+) {
+  const completed: Array<{ value: T | null; attempt: ProviderAttempt } | undefined> =
+    new Array(sources.length).fill(undefined);
+  const snapshot = () => {
+    const results = completed.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
+    return {
+      result: choose(results.flatMap(({ value }) => value ? [value] : [])),
+      attempts: results.map((entry) => entry.attempt),
+    };
+  };
+  await Promise.all(sources.map(async (source, index) => {
+    const started = Date.now();
+    let value: T | null = null;
+    let status: ProviderAttempt["status"] = "miss";
+    let detail = "No verified usable match.";
+    try {
+      value = await source.lookup();
+      if (value) {
+        status = source.usable && !source.usable(value) ? "partial" : "hit";
+        detail = status === "partial" ? "Verified match is missing a name or title." : "Verified match returned.";
+      }
+    } catch (error) {
+      status = "error";
+      const failure = describeLookupFailure(error);
+      detail = failure.summary;
+      console.warn("[inbound-routing] lookup failed", {
+        tool: source.tool, ...failure, durationMs: Date.now() - started,
+      });
+    }
+    completed[index] = { value, attempt: attempt(index + 1, source.provider, source.tool, status, started, detail) };
+    const current = snapshot();
+    progress(current.result, current.attempts);
+  }));
+  return snapshot();
+}
+
 export async function enrichCompany(
   domain: string,
   runner: ToolRunner = executeTool,
+  onProgress?: (result: CompanyWaterfallResult) => void,
 ): Promise<CompanyWaterfallResult> {
-  const attempts: ProviderAttempt[] = [];
-  const startedAt = Date.now();
-  try {
-    const raw = await runner(COMPANY_CRUST_TOOL, {
-      domains: [domain],
-      exact_match: true,
-      fields: ["basic_info", "revenue", "headcount", "taxonomy", "locations"],
-    });
-    const company = companyProfileFromCrust(raw, domain);
-    if (company) {
-      attempts.push(
-        attempt(1, "CrustData", COMPANY_CRUST_TOOL, "hit", startedAt, "Usable company profile returned."),
-        attempt(2, "People Data Labs", COMPANY_PDL_TOOL, "skipped", Date.now(), "Skipped because CrustData returned a usable company profile."),
-      );
-      return { company, trace: { entity: "company", attempts } };
-    }
-    attempts.push(
-      attempt(1, "CrustData", COMPANY_CRUST_TOOL, "miss", startedAt, "No usable company profile returned."),
-    );
-  } catch {
-    attempts.push(
-      attempt(1, "CrustData", COMPANY_CRUST_TOOL, "error", startedAt, "Provider request failed; continuing to the next source."),
-    );
-  }
-
-  const fallbackStartedAt = Date.now();
-  try {
-    const raw = await runner(COMPANY_PDL_TOOL, {
-      domain,
-      min_likelihood: 6,
-      include_if_matched: true,
-      required: "employee_count",
-    });
-    const company = companyProfileFromPdl(raw, domain);
-    attempts.push(
-      attempt(
-        2,
-        "People Data Labs",
-        COMPANY_PDL_TOOL,
-        company ? "hit" : "miss",
-        fallbackStartedAt,
-        company
-          ? "Usable company profile returned."
-          : "No usable company profile returned.",
-      ),
-    );
-    return { company, trace: { entity: "company", attempts } };
-  } catch {
-    attempts.push(
-      attempt(
-        2,
-        "People Data Labs",
-        COMPANY_PDL_TOOL,
-        "error",
-        fallbackStartedAt,
-        "Provider request failed; the company waterfall is exhausted.",
-      ),
-    );
-    return { company: null, trace: { entity: "company", attempts } };
-  }
+  const pack = (company: CompanyProfile | null, attempts: ProviderAttempt[]): CompanyWaterfallResult =>
+    ({ company, trace: { entity: "company", attempts } });
+  const { result, attempts } = await lookupTogether([
+    { provider: "CrustData", tool: COMPANY_CRUST_TOOL, lookup: async () =>
+      companyProfileFromCrust(await runner(COMPANY_CRUST_TOOL, {
+        domains: [domain], exact_match: true,
+        fields: ["basic_info", "revenue", "headcount", "taxonomy", "locations"],
+      }), domain) },
+    { provider: "People Data Labs", tool: COMPANY_PDL_TOOL, lookup: async () =>
+      companyProfileFromPdl(await runner(COMPANY_PDL_TOOL, {
+        domain, min_likelihood: 6, include_if_matched: true, required: "employee_count",
+      }), domain) },
+  ], (matches) => matches[0] ?? null, (profile, trace) => onProgress?.(pack(profile, trace)));
+  return pack(result, attempts);
 }
 
 export async function enrichPerson(
   input: PersonInput,
   runner: ToolRunner = executeTool,
+  onProgress?: (result: PersonWaterfallResult) => void,
 ): Promise<PersonWaterfallResult> {
-  const attempts: ProviderAttempt[] = [];
-  let primaryPerson: PersonProfile | null = null;
-  const startedAt = Date.now();
-  try {
-    const raw = await runner(PERSON_CRUST_TOOL, {
-      business_email: input.email,
-      enrich_realtime: true,
-      fields:
-        "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
-    });
-    const person = personProfile(raw, input, "CrustData");
-    if (person?.title) {
-      attempts.push(
-        attempt(1, "CrustData", PERSON_CRUST_TOOL, "hit", startedAt, "Exact-email person profile returned."),
-        attempt(2, "People Data Labs", PERSON_PDL_TOOL, "skipped", Date.now(), "Skipped because CrustData returned an exact-email person profile."),
-      );
-      return { person, trace: { entity: "person", attempts } };
-    }
-    primaryPerson = person;
-    attempts.push(
-      attempt(
-        1,
-        "CrustData",
-        PERSON_CRUST_TOOL,
-        person ? "partial" : "miss",
-        startedAt,
-        person
-          ? "Exact-email identity returned without a title; continuing for professional fields."
-          : "No exact-email person profile returned.",
-      ),
-    );
-  } catch {
-    attempts.push(
-      attempt(1, "CrustData", PERSON_CRUST_TOOL, "error", startedAt, "Provider request failed; continuing to the next source."),
-    );
-  }
-
-  const fallbackStartedAt = Date.now();
-  try {
-    const raw = await runner(PERSON_PDL_TOOL, {
-      email: input.email,
-      ...(input.firstName ? { first_name: input.firstName } : {}),
-      ...(input.lastName ? { last_name: input.lastName } : {}),
-      min_likelihood: 6,
-      include_if_matched: true,
-      data_include:
-        "full_name,first_name,last_name,work_email,job_title,job_title_role,job_title_levels,location_name,linkedin_url",
-    });
-    const fallbackPerson = personProfile(raw, input, "People Data Labs");
-    const person =
-      primaryPerson && fallbackPerson
-        ? mergePersonProfiles(primaryPerson, fallbackPerson)
-        : fallbackPerson ?? primaryPerson;
-    attempts.push(
-      attempt(
-        2,
-        "People Data Labs",
-        PERSON_PDL_TOOL,
-        fallbackPerson ? "hit" : "miss",
-        fallbackStartedAt,
-        fallbackPerson
-          ? "Exact-email person profile returned."
-          : primaryPerson
-            ? "No additional professional fields returned; keeping the verified primary identity."
-            : "No exact-email person profile returned.",
-      ),
-    );
-    return { person, trace: { entity: "person", attempts } };
-  } catch {
-    attempts.push(
-      attempt(
-        2,
-        "People Data Labs",
-        PERSON_PDL_TOOL,
-        "error",
-        fallbackStartedAt,
-        "Provider request failed; the person waterfall is exhausted.",
-      ),
-    );
-    return { person: primaryPerson, trace: { entity: "person", attempts } };
-  }
+  const pack = (person: PersonProfile | null, attempts: ProviderAttempt[]): PersonWaterfallResult =>
+    ({ person, trace: { entity: "person", attempts } });
+  const sources: Source<PersonProfile>[] = [
+    { provider: "CrustData", tool: PERSON_CRUST_TOOL, lookup: async () =>
+      personProfile(await runner(PERSON_CRUST_TOOL, {
+        business_email: input.email, enrich_realtime: true,
+        fields: "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
+      }), input, "CrustData") },
+    { provider: "People Data Labs", tool: PERSON_PDL_TOOL, lookup: async () =>
+      personProfile(await runner(PERSON_PDL_TOOL, {
+        email: input.email,
+        ...(input.firstName ? { first_name: input.firstName } : {}),
+        ...(input.lastName ? { last_name: input.lastName } : {}),
+        min_likelihood: 6, include_if_matched: true,
+        data_include: "full_name,first_name,last_name,work_email,job_title,job_title_role,job_title_levels,location_name,linkedin_url",
+      }), input, "People Data Labs") },
+    { provider: "Prospeo", tool: "prospeo_enrich_person", lookup: async () => {
+      const raw = await runner("prospeo_enrich_person", { email: input.email, only_verified_email: true });
+      const matches = candidateRecords(raw).flatMap((row) => {
+        if (!isRecord(row.email) || row.email.status !== "VERIFIED") return [];
+        return [{ work_email: row.email.email, full_name: row.full_name ?? row.name,
+          title: (isRecord(row.job) ? row.job.title : null) ?? row.current_job_title ?? row.title,
+          linkedin_url: row.linkedin_url }];
+      });
+      return personProfile(matches, input, "Prospeo");
+    } },
+  ];
+  if (input.verifiedLinkedInUrl) sources.push({ provider: "Deepline Native", tool: "search_contact", lookup: async () => {
+      const linkedin = await input.verifiedLinkedInUrl;
+      if (!linkedin) return null;
+      const key = (url: string) => url.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "").toLowerCase();
+      const raw = await runner("search_contact", {
+        contact_linkedin: linkedin, domain: input.email.split("@")[1], page_size: 3, free_only: true,
+      });
+      const matches = candidateRecords(raw).filter((row) => {
+        const url = stringValue(row.linkedin_url);
+        return url && key(url) === key(linkedin);
+      });
+      return matches.length === 1
+        ? personProfile({ ...matches[0], work_email: input.email }, input, "HubSpot + Deepline Native")
+        : null;
+    } });
+  const { result, attempts } = await lookupTogether(sources.map((source) => ({
+    ...source, usable: (person: PersonProfile) => Boolean(person.fullName && person.title),
+  })), (matches) => matches.reduce<PersonProfile | null>((best, profile) =>
+    best ? mergePersonProfiles(best, profile) : profile, null),
+  (profile, trace) => onProgress?.(pack(profile, trace)));
+  return pack(result, attempts);
 }

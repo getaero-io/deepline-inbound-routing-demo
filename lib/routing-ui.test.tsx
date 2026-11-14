@@ -117,10 +117,10 @@ describe("inbound routing result UI", () => {
     expect(markup).toContain('referrerPolicy="no-referrer"');
     expect(markup).toContain('aria-label="Open Jai Toor calendar in a new tab"');
     expect(markup.indexOf("Live contact enrichment")).toBeLessThan(
-      markup.indexOf("Deepline SDK waterfall"),
+      markup.indexOf("Data sources behind the calendar decision"),
     );
     expect(markup.indexOf("Live company enrichment")).toBeLessThan(
-      markup.indexOf("Deepline SDK waterfall"),
+      markup.indexOf("Data sources behind the calendar decision"),
     );
   });
 });

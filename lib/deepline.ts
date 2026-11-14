@@ -11,9 +11,8 @@ function getClient() {
     baseUrl:
       process.env.INBOUND_DEMO_DEEPLINE_API_BASE_URL ||
       "https://code.deepline.com",
-    // Every individual provider call fails fast below the five-second route SLO.
-    // The route itself has a stricter 4.8s cap and can continue enrichment later.
-    timeout: 3_600,
+    // Calendar selection has its own 4.8-second deadline.
+    timeout: 12_000,
     maxRetries: 0,
   });
   return client;
