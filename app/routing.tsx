@@ -206,7 +206,7 @@ export function InboundRouting({
                   qualification: update.qualification ?? current.qualification,
                   person: update.person ?? current.person,
                   contact: update.contact ?? current.contact,
-                  route: update.route ?? current.route,
+                  route: current.route,
                   trace: update.trace ?? current.trace,
                   // Late enrichment must not rewrite how long the booking route took.
                   elapsedMs: current.elapsedMs,
@@ -502,10 +502,10 @@ export function InboundRouting({
             <summary>Data sources behind the calendar decision</summary>
             <p>
               Company size and industry come from CrustData or People Data Labs.
-              Contact data starts with HubSpot. A CRM-linked LinkedIn profile can
-              be checked with Deepline Native People Search. For email lookup,
-              CrustData, People Data Labs, and Prospeo run in that order until a
-              usable profile is found.
+              HubSpot, company enrichment, and email lookups run together.
+              Deepline Native People Search joins when HubSpot returns a linked
+              profile. The calendar uses the strongest verified evidence available
+              by the deadline. Later results update the evidence.
             </p>
             {result.trace.waterfalls.map((waterfall) => (
               <div className="waterfall-lane" key={waterfall.entity}>

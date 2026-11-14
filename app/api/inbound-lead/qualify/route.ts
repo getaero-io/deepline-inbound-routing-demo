@@ -14,7 +14,7 @@ import {
 import { startPlay } from "../../../../lib/deepline";
 import { markSubmitted } from "../../../../lib/capture";
 import { launchNurture } from "../../../../lib/nurture";
-import { enrichCompany, enrichPerson } from "../../../../lib/enrichment";
+import { describeLookupFailure, enrichCompany, enrichPerson } from "../../../../lib/enrichment";
 import {
   fillMissingHubSpotFields,
   lookupHubSpot,
@@ -28,6 +28,7 @@ import {
 } from "../../../../lib/routing";
 
 export const runtime = "nodejs";
+export const maxDuration = 45;
 
 const ROUTE_DEADLINE_MS = 4_800;
 const AUTH_DEADLINE_MS = 3_200;
@@ -143,7 +144,7 @@ function pendingWaterfall(entity: "company" | "person") {
           entity === "company" ? "peopledatalabs_enrich_company" : "peopledatalabs_enrich_contact",
         status: "pending",
         durationMs: 0,
-        detail: "Runs only if the CrustData step does not return a usable match.",
+        detail: "Runs alongside CrustData.",
       },
     ],
   } as const;
@@ -156,7 +157,7 @@ function waterfallSummary(trace: WaterfallTrace | ReturnType<typeof pendingWater
   if (partial) return `${partial.provider} returned a verified partial ${trace.entity} profile.`;
   if (trace.attempts.some((attempt) => attempt.status === "pending"))
     return `${trace.entity === "company" ? "Company" : "Contact"} enrichment is still running.`;
-  return `The ${trace.entity} waterfall completed without a usable match.`;
+  return `The ${trace.entity} lookups completed without a usable match.`;
 }
 
 function crmRecordSummary(label: "Contact" | "Account", matched: boolean, unavailable: boolean) {
@@ -375,20 +376,19 @@ export async function POST(request: Request) {
     .catch((error) => {
       console.error("[inbound-routing] HubSpot lookup unavailable", {
         domain,
-        error: error instanceof Error ? error.message : "Unknown error",
+        ...describeLookupFailure(error),
       });
       return EMPTY_CRM;
     });
-  const companyWork = enrichCompany(domain);
-  const personWork = crmWork.then((crm) => {
+  let latestCompany: CompanyWaterfallResult | null = null;
+  let latestPerson: PersonWaterfallResult | null = null;
+  const companyWork = enrichCompany(domain, undefined, (result) => { latestCompany = result; });
+  const verifiedLinkedInUrl = crmWork.then((crm) => {
     const linkedin = text(crm.contactProperties?.hs_linkedin_url);
-    return enrichPerson({
-      email,
-      ...(linkedin && /^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-z0-9_%.-]+\/?$/i.test(linkedin)
-        ? { verifiedLinkedInUrl: linkedin }
-        : {}),
-    });
+    return linkedin && /^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-z0-9_%.-]+\/?$/i.test(linkedin)
+      ? linkedin : undefined;
   });
+  const personWork = enrichPerson({ email, verifiedLinkedInUrl }, undefined, (result) => { latestPerson = result; });
   const authWork = withinDeadline(
     companyWork.then(async ({ company }) => {
       const technologySignal = authFromTechnologies(company?.technologies ?? []);
@@ -428,6 +428,8 @@ export async function POST(request: Request) {
         personWork,
         crmTitle: crm.title,
         timeoutMs: ROUTE_DEADLINE_MS - (Date.now() - started),
+        latestCompany: () => latestCompany,
+        latestPerson: () => latestPerson,
       });
       companyResult = resolution.companyResult;
       personResult = resolution.personResult;
@@ -435,7 +437,7 @@ export async function POST(request: Request) {
         route = fallbackDecision(
           resolution.timedOut
             ? "No high-confidence signal completed within five seconds, so the safe route goes to Anand while enrichment continues."
-            : "Both enrichment waterfalls completed without a confident match, so the safe route goes to Anand.",
+            : "The parallel lookups found no confident match, so Anand’s backup calendar is ready.",
         );
       } else {
         route = {

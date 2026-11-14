@@ -239,6 +239,8 @@ export async function resolveFastEnrichmentRoute(input: {
   personWork: Promise<PersonWaterfallResult>;
   crmTitle: string | null;
   timeoutMs: number;
+  latestCompany?: () => CompanyWaterfallResult | null;
+  latestPerson?: () => PersonWaterfallResult | null;
 }): Promise<FastRouteResolution> {
   let companyResult: CompanyWaterfallResult | null = null;
   let personResult: PersonWaterfallResult | null = null;
@@ -285,6 +287,8 @@ export async function resolveFastEnrichmentRoute(input: {
     while (pending.size) {
       const event = await Promise.race([...pending.values(), deadline]);
       if (event.lane === "deadline") {
+        companyResult ??= input.latestCompany?.() ?? null;
+        personResult ??= input.latestPerson?.() ?? null;
         const available = companyResult?.company || personResult?.person;
         return {
           route: available
