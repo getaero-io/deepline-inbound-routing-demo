@@ -14,7 +14,7 @@ import {
 import { startPlay } from "../../../../lib/deepline";
 import { markSubmitted } from "../../../../lib/capture";
 import { launchNurture } from "../../../../lib/nurture";
-import { describeLookupFailure, enrichCompany, enrichPerson } from "../../../../lib/enrichment";
+import { describeLookupFailure, enrichCompany, enrichPerson, PERSON_CRUST_TOOL } from "../../../../lib/enrichment";
 import {
   fillMissingHubSpotFields,
   lookupHubSpot,
@@ -132,7 +132,7 @@ function pendingWaterfall(entity: "company" | "person") {
       {
         order: 1,
         provider: "CrustData",
-        tool: entity === "company" ? "crustdata_v3_company_enrich" : "crustdata_v2_enrich_person",
+        tool: entity === "company" ? "crustdata_v3_company_enrich" : PERSON_CRUST_TOOL,
         status: "pending",
         durationMs: 0,
         detail: "The primary Deepline SDK step is still running.",

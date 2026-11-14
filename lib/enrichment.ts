@@ -12,7 +12,7 @@ import { executeTool } from "./deepline";
 
 const COMPANY_CRUST_TOOL = "crustdata_v3_company_enrich";
 const COMPANY_PDL_TOOL = "peopledatalabs_enrich_company";
-const PERSON_CRUST_TOOL = "crustdata_v2_enrich_person";
+export const PERSON_CRUST_TOOL = "crustdata_v3_person_enrich";
 const PERSON_PDL_TOOL = "peopledatalabs_enrich_contact";
 
 function isRecord(value: unknown): value is RecordValue {
@@ -397,6 +397,44 @@ function personProfile(
   };
 }
 
+function crustPersonProfile(value: unknown, input: PersonInput): PersonProfile | null {
+  const email = input.email.trim().toLowerCase();
+  const matches = candidateRecords(value).flatMap((row) => {
+    if (row.match_type !== "business_email" ||
+        stringValue(row.matched_on)?.toLowerCase() !== email ||
+        !Array.isArray(row.matches)) return [];
+
+    return row.matches.flatMap((match: unknown) => {
+      if (!isRecord(match) || !isRecord(match.person_data)) return [];
+      const score = match.confidence_score;
+      if (typeof score !== "number" || !Number.isFinite(score) || score > 100) return [];
+      const confidence = score > 1 ? score / 100 : score;
+      return confidence >= 0.7 ? [{ confidence, data: match.person_data }] : [];
+    });
+  });
+  const data = matches.sort((a, b) => b.confidence - a.confidence)[0]?.data;
+  if (!data) return null;
+
+  const basic = isRecord(data.basic_profile) ? data.basic_profile : {};
+  const social = isRecord(data.social_handles) ? data.social_handles : {};
+  const linkedin = isRecord(social.professional_network_identifier)
+    ? social.professional_network_identifier : {};
+  const employment = isRecord(data.experience) && isRecord(data.experience.employment_details)
+    ? data.experience.employment_details.current : null;
+  const current = Array.isArray(employment) ? employment.find(isRecord) : undefined;
+  return personProfile({
+    work_email: email,
+    full_name: basic.name,
+    first_name: basic.first_name,
+    last_name: basic.last_name,
+    title: stringValue(basic.current_title) ?? current?.title,
+    seniority: current?.seniority_level,
+    headline: basic.headline,
+    location: basic.location,
+    linkedin_url: linkedin.profile_url,
+  }, input, "CrustData");
+}
+
 function attempt(
   order: number,
   provider: string,
@@ -536,10 +574,10 @@ export async function enrichPerson(
     ({ person, trace: { entity: "person", attempts } });
   const sources: Source<PersonProfile>[] = [
     { provider: "CrustData", tool: PERSON_CRUST_TOOL, lookup: async () =>
-      personProfile(await runner(PERSON_CRUST_TOOL, {
-        business_email: input.email, enrich_realtime: true,
-        fields: "linkedin_profile_url,name,location,email,business_email,title,headline,skills,current_employers,all_employers,all_titles",
-      }), input, "CrustData") },
+      crustPersonProfile(await runner(PERSON_CRUST_TOOL, {
+        business_emails: [input.email],
+        fields: ["basic_profile", "experience", "social_handles"],
+      }), input) },
     { provider: "People Data Labs", tool: PERSON_PDL_TOOL, lookup: async () =>
       personProfile(await runner(PERSON_PDL_TOOL, {
         email: input.email,
