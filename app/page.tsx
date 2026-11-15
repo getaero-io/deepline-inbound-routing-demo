@@ -11,20 +11,8 @@ export default async function Page({
     <main className="shell">
       <section className="copy">
         <span>DEEPLINE</span>
-        <h1>
-          Find your demo host.
-          <br />
-          <em>See why they matched.</em>
-        </h1>
-        <p>
-          Enter your work email to see who you’ll meet, what informed the match,
-          and which calendar to book.
-        </p>
-        <ul>
-          <li>An existing HubSpot owner takes priority.</li>
-          <li>For eligible new leads, industry and specialty help choose the host.</li>
-          <li>A backup calendar opens if qualification takes too long.</li>
-        </ul>
+        <h1>Meet your Deepline demo host.</h1>
+        <p>Enter your work email to see who you’ll meet, why they’re a fit, and when you can book.</p>
       </section>
       <InboundRouting initialEmail={initialEmail} />
     </main>
