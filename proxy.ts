@@ -10,6 +10,9 @@ function unauthorized() {
 }
 
 export function proxy(request: NextRequest) {
+  // This exact endpoint verifies Calendly's timestamped HMAC in its handler.
+  // Calendly cannot send this demo's browser Basic Auth credentials.
+  if (request.nextUrl.pathname === '/api/webhooks/calendly') return NextResponse.next();
   const password = process.env.INBOUND_DEMO_ACCESS_PASSWORD;
 
   // Local development stays frictionless. A production deployment without its

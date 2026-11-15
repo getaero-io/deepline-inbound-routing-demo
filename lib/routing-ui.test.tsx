@@ -95,16 +95,11 @@ describe("inbound routing result UI", () => {
 
     for (const expected of [
       "25",
-      "$10M-$25M",
       "software development",
-      "San Mateo, California, United States",
       "Revenue Operations Manager",
-      "Manager",
-      "Go-to-market",
-      "People Data Labs",
-      "No provider found",
-      "CRM account",
-      "Matched",
+      "Existing record found",
+      "Why this host",
+      "GTM systems roles route to Jai.",
       "Open calendar in a new tab",
     ])
       expect(markup).toContain(expected);
@@ -116,11 +111,7 @@ describe("inbound routing result UI", () => {
     expect(markup).toContain('title="Book time with Jai Toor"');
     expect(markup).toContain('referrerPolicy="no-referrer"');
     expect(markup).toContain('aria-label="Open Jai Toor calendar in a new tab"');
-    expect(markup.indexOf("Live contact enrichment")).toBeLessThan(
-      markup.indexOf("Deepline SDK waterfall"),
-    );
-    expect(markup.indexOf("Live company enrichment")).toBeLessThan(
-      markup.indexOf("Deepline SDK waterfall"),
-    );
+    expect(markup.indexOf("Why this host")).toBeLessThan(markup.indexOf("What Deepline checked"));
+    expect(markup).not.toContain("inferred_revenue");
   });
 });

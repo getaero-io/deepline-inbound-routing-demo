@@ -158,6 +158,20 @@ h1 em {
 .company h2 {
   margin: 4px 0;
 }
+.match-company {
+  margin: 0 0 16px;
+}
+.match-company strong {
+  display: block;
+  margin-top: 4px;
+}
+.match-progress {
+  color: var(--muted);
+  font-size: 13px;
+}
+.provider-details {
+  margin-top: 14px;
+}
 .score {
   border: 1px solid var(--line);
   padding: 15px;

@@ -11,20 +11,8 @@ export default async function Page({
     <main className="shell">
       <section className="copy">
         <span>DEEPLINE</span>
-        <h1>
-          Talk to us.
-          <br />
-          <em>We’ll find the right team.</em>
-        </h1>
-        <p>
-          Tell us who you are. We’ll verify your company, preserve an existing Deepline
-          relationship, and put the right calendar in front of you.
-        </p>
-        <ul>
-          <li>Route first; enrichment updates live; safe handoff by five seconds</li>
-          <li>Work email only — no company form field</li>
-          <li>One Deepline key — swap data sources without rebuilding the app</li>
-        </ul>
+        <h1>Meet your Deepline demo host.</h1>
+        <p>Enter your work email to see who you’ll meet, why they’re a fit, and when you can book.</p>
       </section>
       <InboundRouting initialEmail={initialEmail} />
     </main>

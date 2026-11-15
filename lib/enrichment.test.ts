@@ -3,8 +3,16 @@ import { describe, expect, test } from "bun:test";
 import { enrichCompany, enrichPerson } from "./enrichment";
 import type { ToolRunner } from "./contracts";
 
+function crustPersonResult(email: string, personData: Record<string, unknown>) {
+  return { data: [{
+    matched_on: email,
+    match_type: "business_email",
+    matches: [{ confidence_score: 1, person_data: personData }],
+  }] };
+}
+
 describe("company enrichment waterfall", () => {
-  test("a usable CrustData result skips People Data Labs", async () => {
+  test("the preferred company match wins when both calls run", async () => {
     const calls: string[] = [];
     const runner: ToolRunner = async (tool) => {
       calls.push(tool);
@@ -20,10 +28,10 @@ describe("company enrichment waterfall", () => {
 
     expect(result.company?.name).toBe("Acme");
     expect(result.company?.employeeCount).toBe(640);
-    expect(calls).toEqual(["crustdata_v3_company_enrich"]);
+    expect(calls).toEqual(["crustdata_v3_company_enrich", "peopledatalabs_enrich_company"]);
     expect(result.trace.attempts.map(({ provider, status }) => ({ provider, status }))).toEqual([
       { provider: "CrustData", status: "hit" },
-      { provider: "People Data Labs", status: "skipped" },
+      { provider: "People Data Labs", status: "miss" },
     ]);
   });
 
@@ -221,17 +229,59 @@ describe("company enrichment waterfall", () => {
 });
 
 describe("person enrichment waterfall", () => {
-  test("an exact-email CrustData result skips People Data Labs", async () => {
+  test("looks up a CRM-linked profile for free alongside reverse email providers", async () => {
     const calls: string[] = [];
-    const runner: ToolRunner = async (tool) => {
+    const result = await enrichPerson({
+      email: "alex@acme.com",
+      verifiedLinkedInUrl: "https://linkedin.com/in/alex",
+    }, async (tool, input) => {
       calls.push(tool);
-      return {
-        name: "Alex Morgan",
-        business_email: "alex@acme.com",
-        title: "VP of Revenue Operations",
-        location: "New York, New York, United States",
-        linkedin_profile_url: "https://www.linkedin.com/in/alex-morgan",
-      };
+      if (tool !== "search_contact") return {};
+      expect(input).toEqual({
+        contact_linkedin: "https://www.linkedin.com/in/alex/",
+        page_number: 1,
+        page_size: 3,
+        free_only: true,
+      });
+      return { persons: [{ linkedin_url: "https://www.linkedin.com/in/alex/", first_name: "Alex", last_name: "Morgan", title: "GTM Engineer" }] };
+    });
+    expect(calls).toEqual(["crustdata_v3_person_enrich", "peopledatalabs_enrich_contact", "prospeo_enrich_person", "search_contact"]);
+    expect(result.person?.fullName).toBe("Alex Morgan");
+  });
+
+  test("recovers an exact verified identity from Prospeo when earlier lookups fail", async () => {
+    const result = await enrichPerson({ email: "alex@acme.com" }, async (tool) => {
+      if (tool === "crustdata_v3_person_enrich") throw new Error("provider unavailable");
+      if (tool === "peopledatalabs_enrich_contact") return {};
+      return { data: { person: {
+        email: { email: "alex@acme.com", status: "VERIFIED" },
+        full_name: "Alex Morgan",
+        current_job_title: "GTM Engineer",
+      } } };
+    });
+    expect(result.person?.enrichmentSource).toBe("Prospeo");
+    expect(result.person?.title).toBe("GTM Engineer");
+    expect(result.trace.attempts.map((step) => step.status)).toEqual(["error", "miss", "hit"]);
+  });
+  test("an exact-email CrustData result is selected from parallel lookups", async () => {
+    const calls: string[] = [];
+    const runner: ToolRunner = async (tool, input) => {
+      calls.push(tool);
+      if (tool !== "crustdata_v3_person_enrich") return {};
+      expect(input).toEqual({
+        business_emails: ["alex@acme.com"],
+        fields: ["basic_profile", "experience", "social_handles"],
+      });
+      return crustPersonResult("alex@acme.com", {
+        basic_profile: {
+          name: "Alex Morgan",
+          current_title: "VP of Revenue Operations",
+          location: "New York, New York, United States",
+        },
+        social_handles: {
+          professional_network_identifier: { profile_url: "https://www.linkedin.com/in/alex-morgan" },
+        },
+      });
     };
 
     const result = await enrichPerson(
@@ -242,10 +292,11 @@ describe("person enrichment waterfall", () => {
     expect(result.person?.title).toBe("VP of Revenue Operations");
     expect(result.person?.seniority).toBe("VP");
     expect(result.person?.role).toBe("Go-to-market");
-    expect(calls).toEqual(["crustdata_v2_enrich_person"]);
+    expect(calls).toEqual(["crustdata_v3_person_enrich", "peopledatalabs_enrich_contact", "prospeo_enrich_person"]);
     expect(result.trace.attempts.map(({ status }) => status)).toEqual([
       "hit",
-      "skipped",
+      "miss",
+      "miss",
     ]);
   });
 
@@ -255,11 +306,10 @@ describe("person enrichment waterfall", () => {
     const runner: ToolRunner = async (tool, input) => {
       calls.push(tool);
       inputs.push(input);
-      if (tool === "crustdata_v2_enrich_person")
-        return {
-          business_email: "someone-else@acme.com",
-          title: "Chief Revenue Officer",
-        };
+      if (tool === "crustdata_v3_person_enrich")
+        return crustPersonResult("someone-else@acme.com", {
+          basic_profile: { name: "Someone Else", current_title: "Chief Revenue Officer" },
+        });
       return {
         data: {
           work_email: "alex@acme.com",
@@ -281,12 +331,14 @@ describe("person enrichment waterfall", () => {
     expect(result.person?.title).toBe("Director of Sales Operations");
     expect(result.person?.enrichmentSource).toBe("People Data Labs");
     expect(calls).toEqual([
-      "crustdata_v2_enrich_person",
+      "crustdata_v3_person_enrich",
       "peopledatalabs_enrich_contact",
+      "prospeo_enrich_person",
     ]);
     expect(result.trace.attempts.map(({ status }) => status)).toEqual([
       "miss",
       "hit",
+      "miss",
     ]);
     expect(inputs[1]).toMatchObject({
       min_likelihood: 6,
@@ -302,11 +354,12 @@ describe("person enrichment waterfall", () => {
     const calls: string[] = [];
     const runner: ToolRunner = async (tool) => {
       calls.push(tool);
-      return tool === "crustdata_v2_enrich_person"
-        ? {
-            business_email: "alex@acme.com",
-            linkedin_profile_url: "https://linkedin.com/in/alex",
-          }
+      return tool === "crustdata_v3_person_enrich"
+        ? crustPersonResult("alex@acme.com", {
+            social_handles: {
+              professional_network_identifier: { profile_url: "https://linkedin.com/in/alex" },
+            },
+          })
         : {
             data: {
               work_email: "alex@acme.com",
@@ -323,8 +376,9 @@ describe("person enrichment waterfall", () => {
     );
 
     expect(calls).toEqual([
-      "crustdata_v2_enrich_person",
+      "crustdata_v3_person_enrich",
       "peopledatalabs_enrich_contact",
+      "prospeo_enrich_person",
     ]);
     expect(result.person?.fullName).toBe("Alex Morgan");
     expect(result.person?.title).toBe("Revenue Operations Manager");
@@ -335,6 +389,7 @@ describe("person enrichment waterfall", () => {
     expect(result.trace.attempts.map(({ status }) => status)).toEqual([
       "partial",
       "hit",
+      "miss",
     ]);
   });
 
@@ -342,7 +397,7 @@ describe("person enrichment waterfall", () => {
     const calls: string[] = [];
     const runner: ToolRunner = async (tool) => {
       calls.push(tool);
-      if (tool === "crustdata_v2_enrich_person") throw new Error("upstream auth");
+      if (tool === "crustdata_v3_person_enrich") throw new Error("upstream auth");
       return {
         work_email: "sam@enterprise.com",
         full_name: "Sam Rivera",
@@ -357,12 +412,14 @@ describe("person enrichment waterfall", () => {
 
     expect(result.person?.title).toBe("GTM Engineer");
     expect(calls).toEqual([
-      "crustdata_v2_enrich_person",
+      "crustdata_v3_person_enrich",
       "peopledatalabs_enrich_contact",
+      "prospeo_enrich_person",
     ]);
     expect(result.trace.attempts.map(({ status }) => status)).toEqual([
       "error",
       "hit",
+      "miss",
     ]);
   });
 });

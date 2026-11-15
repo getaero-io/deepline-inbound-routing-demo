@@ -70,7 +70,7 @@ const trusted = {
 
 test("automated follow-up queues intent, sleeps, verifies booking, then enrolls", async () => {
   const { result, calls } = await run(trusted);
-  expect(result.plan.decision).toBe("nurture");
+  expect(result).toMatchObject({ plan: { decision: "nurture" } });
   expect(calls).toContain("hubspot_enroll_contact_in_sequence");
 });
 
@@ -79,7 +79,7 @@ test("HubSpot epoch-millisecond booking timestamps are recognized", async () => 
     ...trusted,
     checked: String(Date.parse(trusted.checked)),
   });
-  expect(result.plan.decision).toBe("nurture");
+  expect(result).toMatchObject({ plan: { decision: "nurture" } });
 });
 
 test("bookings, missing signals, stale checks, wrong identity and ineligible leads suppress outreach", async () => {
@@ -107,8 +107,7 @@ test("unknown sequence status fails closed and active enrollment is not repeated
 test("dry run performs no writes or waits and includes the personalized draft", async () => {
   const data = { ...input(), execute: false };
   const result = await nurture({ log: () => {} } as never, data);
-  expect(result.mode).toBe("dry_run");
-  expect(result.applied).toEqual([]);
+  expect(result).toMatchObject({ mode: "dry_run", applied: [] });
 });
 
 test("draft uses supplied facts, escapes HTML and keeps URLs out of plain fallback", () => {

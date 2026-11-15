@@ -4,6 +4,7 @@ import type {
   PersonProfile,
   PersonWaterfallResult,
 } from "./contracts";
+import { selectRepBooking } from "./rep-fit";
 
 export const CALENDARS = {
   jai: {
@@ -146,8 +147,29 @@ export function routeLead(input: RouteInput) {
     industry,
   ].filter((value) => value !== null && value !== undefined && value !== "").length;
 
+  const enterpriseRoute = (salesTeamSize ?? 0) > 20 || (employeeCount ?? 0) >= 250;
+  const repFit = input.owner || input.existingCustomer || enterpriseRoute ? null : selectRepBooking(
+    {
+      industry: [industry],
+      specialty: [
+        ...(gtmRole ? ["GTM systems"] : []),
+        ...(deploymentRole ? ["Deployment"] : []),
+      ],
+    },
+    [
+      { id: "jai", bookingUrl: CALENDARS.jai.bookingUrl, attributes: {
+        industry: ["SaaS", "B2B SaaS"], specialty: ["GTM systems"],
+      } },
+      { id: "anand", bookingUrl: CALENDARS.anand.bookingUrl, attributes: {
+        industry: ["Airlines and aviation", "Pharmaceutical manufacturing"], specialty: ["Deployment"],
+      } },
+    ] as const,
+    CALENDARS.anand.bookingUrl,
+  );
+
   const owner =
     input.owner ??
+    (repFit?.repId ? CALENDARS[repFit.repId] : null) ??
     (input.existingCustomer
       ? CALENDARS.anand
       : (salesTeamSize ?? 0) > 20 || employeeCount !== null && employeeCount >= 250
@@ -164,6 +186,8 @@ export function routeLead(input: RouteInput) {
     ? `HubSpot already owns this relationship, so the route stays with ${input.owner.name}.`
     : input.existingCustomer
       ? "Existing customers route to Anand for deployment continuity."
+      : repFit?.repId
+        ? `${owner.name} matched ${repFit.reasons.map(({ signal, points }) => `${signal} (+${points})`).join(" and ")} for a rep fit score of ${repFit.score}/100.`
       : (salesTeamSize ?? 0) > 20
         ? "Sales teams above 20 route to Jai."
         : employeeCount !== null && employeeCount >= 250
@@ -215,6 +239,8 @@ export async function resolveFastEnrichmentRoute(input: {
   personWork: Promise<PersonWaterfallResult>;
   crmTitle: string | null;
   timeoutMs: number;
+  latestCompany?: () => CompanyWaterfallResult | null;
+  latestPerson?: () => PersonWaterfallResult | null;
 }): Promise<FastRouteResolution> {
   let companyResult: CompanyWaterfallResult | null = null;
   let personResult: PersonWaterfallResult | null = null;
@@ -261,6 +287,8 @@ export async function resolveFastEnrichmentRoute(input: {
     while (pending.size) {
       const event = await Promise.race([...pending.values(), deadline]);
       if (event.lane === "deadline") {
+        companyResult ??= input.latestCompany?.() ?? null;
+        personResult ??= input.latestPerson?.() ?? null;
         const available = companyResult?.company || personResult?.person;
         return {
           route: available

@@ -14,7 +14,7 @@ import {
 import { startPlay } from "../../../../lib/deepline";
 import { markSubmitted } from "../../../../lib/capture";
 import { launchNurture } from "../../../../lib/nurture";
-import { enrichCompany, enrichPerson } from "../../../../lib/enrichment";
+import { describeLookupFailure, enrichCompany, enrichPerson, PERSON_CRUST_TOOL } from "../../../../lib/enrichment";
 import {
   fillMissingHubSpotFields,
   lookupHubSpot,
@@ -28,6 +28,7 @@ import {
 } from "../../../../lib/routing";
 
 export const runtime = "nodejs";
+export const maxDuration = 45;
 
 const ROUTE_DEADLINE_MS = 4_800;
 const AUTH_DEADLINE_MS = 3_200;
@@ -131,7 +132,7 @@ function pendingWaterfall(entity: "company" | "person") {
       {
         order: 1,
         provider: "CrustData",
-        tool: entity === "company" ? "crustdata_v3_company_enrich" : "crustdata_v2_enrich_person",
+        tool: entity === "company" ? "crustdata_v3_company_enrich" : PERSON_CRUST_TOOL,
         status: "pending",
         durationMs: 0,
         detail: "The primary Deepline SDK step is still running.",
@@ -143,7 +144,7 @@ function pendingWaterfall(entity: "company" | "person") {
           entity === "company" ? "peopledatalabs_enrich_company" : "peopledatalabs_enrich_contact",
         status: "pending",
         durationMs: 0,
-        detail: "Runs only if the CrustData step does not return a usable match.",
+        detail: "Runs alongside CrustData.",
       },
     ],
   } as const;
@@ -156,7 +157,7 @@ function waterfallSummary(trace: WaterfallTrace | ReturnType<typeof pendingWater
   if (partial) return `${partial.provider} returned a verified partial ${trace.entity} profile.`;
   if (trace.attempts.some((attempt) => attempt.status === "pending"))
     return `${trace.entity === "company" ? "Company" : "Contact"} enrichment is still running.`;
-  return `The ${trace.entity} waterfall completed without a usable match.`;
+  return `The ${trace.entity} lookups completed without a usable match.`;
 }
 
 function crmRecordSummary(label: "Contact" | "Account", matched: boolean, unavailable: boolean) {
@@ -351,13 +352,11 @@ function launchPostRoutePlay(input: Record<string, unknown>) {
 export async function POST(request: Request) {
   const started = Date.now();
   const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-  const firstName = text(body?.firstName);
-  const lastName = text(body?.lastName);
   const email = text(body?.email)?.toLowerCase();
 
-  if (!firstName || !lastName || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+  if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
     return NextResponse.json(
-      { error: "First name, last name, and a valid work email are required." },
+      { error: "Enter a valid work email." },
       { status: 400 },
     );
   const domain = email.split("@")[1]?.toLowerCase();
@@ -377,12 +376,19 @@ export async function POST(request: Request) {
     .catch((error) => {
       console.error("[inbound-routing] HubSpot lookup unavailable", {
         domain,
-        error: error instanceof Error ? error.message : "Unknown error",
+        ...describeLookupFailure(error),
       });
       return EMPTY_CRM;
     });
-  const companyWork = enrichCompany(domain);
-  const personWork = enrichPerson({ email, firstName, lastName });
+  let latestCompany: CompanyWaterfallResult | null = null;
+  let latestPerson: PersonWaterfallResult | null = null;
+  const companyWork = enrichCompany(domain, undefined, (result) => { latestCompany = result; });
+  const verifiedLinkedInUrl = crmWork.then((crm) => {
+    const linkedin = text(crm.contactProperties?.hs_linkedin_url);
+    return linkedin && /^(?:https?:\/\/)?(?:www\.)?linkedin\.com\/in\/[a-z0-9_%.-]+\/?$/i.test(linkedin)
+      ? linkedin : undefined;
+  });
+  const personWork = enrichPerson({ email, verifiedLinkedInUrl }, undefined, (result) => { latestPerson = result; });
   const authWork = withinDeadline(
     companyWork.then(async ({ company }) => {
       const technologySignal = authFromTechnologies(company?.technologies ?? []);
@@ -399,7 +405,9 @@ export async function POST(request: Request) {
   try {
     crm = await withinDeadline(crmWork, ROUTE_DEADLINE_MS - (Date.now() - started));
     const owner = configuredOwner(crm.ownerId);
-    if (owner || crm.existingCustomer) {
+    if (crm.ownerId && !owner) {
+      route = fallbackDecision("The HubSpot owner has no configured calendar. Use the backup calendar while keeping the existing owner.");
+    } else if (owner || crm.existingCustomer) {
       route = {
         ...routeLead({
           company: null,
@@ -420,6 +428,8 @@ export async function POST(request: Request) {
         personWork,
         crmTitle: crm.title,
         timeoutMs: ROUTE_DEADLINE_MS - (Date.now() - started),
+        latestCompany: () => latestCompany,
+        latestPerson: () => latestPerson,
       });
       companyResult = resolution.companyResult;
       personResult = resolution.personResult;
@@ -427,7 +437,7 @@ export async function POST(request: Request) {
         route = fallbackDecision(
           resolution.timedOut
             ? "No high-confidence signal completed within five seconds, so the safe route goes to Anand while enrichment continues."
-            : "Both enrichment waterfalls completed without a confident match, so the safe route goes to Anand.",
+            : "The parallel lookups found no confident match, so Anand’s backup calendar is ready.",
         );
       } else {
         route = {
@@ -502,14 +512,17 @@ export async function POST(request: Request) {
       console.error("[inbound-routing] core enrichment persistence failed", error),
     );
 
-    const hubspotWork = fillMissingHubSpotFields(finalCrm, {
+    const hubspotWork = body?.dryRun === true ? Promise.resolve<HubSpotSync>('not_applicable') : fillMissingHubSpotFields(finalCrm, {
       title: finalPerson?.person?.title ?? null,
       linkedinUrl: finalPerson?.person?.linkedinUrl ?? null,
       companyName: finalCompany?.company?.name ?? null,
       revenue: finalCompany?.company?.revenue ?? finalCrm.revenue,
       calendarUrl: stableRoute.owner.bookingUrl,
     });
-    const nurtureWork = launchNurture({
+    const [givenName = "", ...surname] = finalPerson?.person?.fullName?.split(/\s+/) ?? [];
+    const firstName = text(finalCrm.contactProperties?.firstname) ?? givenName;
+    const lastName = text(finalCrm.contactProperties?.lastname) ?? surname.join(" ");
+    const nurtureWork = body?.dryRun === true ? Promise.resolve() : launchNurture({
       eventId: leadId,
       submittedAt,
       email,
@@ -524,7 +537,7 @@ export async function POST(request: Request) {
     }).catch((error) => {
       console.error("[inbound-routing] nurture launch failed", error);
     });
-    const playWork = launchPostRoutePlay({
+    const playWork = body?.dryRun === true ? Promise.resolve() : launchPostRoutePlay({
       leadId,
       person: { firstName, lastName, email },
       company: {
