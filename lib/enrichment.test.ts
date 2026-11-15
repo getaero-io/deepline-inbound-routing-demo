@@ -237,7 +237,12 @@ describe("person enrichment waterfall", () => {
     }, async (tool, input) => {
       calls.push(tool);
       if (tool !== "search_contact") return {};
-      expect(input.free_only).toBe(true);
+      expect(input).toEqual({
+        contact_linkedin: "https://www.linkedin.com/in/alex/",
+        page_number: 1,
+        page_size: 3,
+        free_only: true,
+      });
       return { persons: [{ linkedin_url: "https://www.linkedin.com/in/alex/", first_name: "Alex", last_name: "Morgan", title: "GTM Engineer" }] };
     });
     expect(calls).toEqual(["crustdata_v3_person_enrich", "peopledatalabs_enrich_contact", "prospeo_enrich_person", "search_contact"]);

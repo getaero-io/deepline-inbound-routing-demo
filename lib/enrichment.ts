@@ -602,7 +602,10 @@ export async function enrichPerson(
       if (!linkedin) return null;
       const key = (url: string) => url.replace(/^https?:\/\/(www\.)?/i, "").replace(/\/$/, "").toLowerCase();
       const raw = await runner("search_contact", {
-        contact_linkedin: linkedin, domain: input.email.split("@")[1], page_size: 3, free_only: true,
+        contact_linkedin: `https://www.linkedin.com/in/${key(linkedin).split("/").at(-1)}/`,
+        page_number: 1,
+        page_size: 3,
+        free_only: true,
       });
       const matches = candidateRecords(raw).filter((row) => {
         const url = stringValue(row.linkedin_url);
